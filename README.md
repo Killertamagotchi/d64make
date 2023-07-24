@@ -50,7 +50,7 @@ To merge in custom resources, d64make can load and extract individual assets
 from a directory tree with a specific structure.
 
 | Folder | Formats | Notes |
-|-:|-|
+|-:|-|-|
 | DEMOS    | LMP |                                     |
 | FLATS    | PNG |                                     |
 | GRAPHICS | PNG | Menu graphics and font              |
