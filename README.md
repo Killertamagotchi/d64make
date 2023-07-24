@@ -88,7 +88,26 @@ d64make build ./mymod -o /path/to/DOOM64-RE/data/
 
 Adding new resources has some limitations.
 
-- Sprites larger than 15 tiles require support with a [patch](https://github.com/9nova/doom64ultra/commit/07ef2794cefa5cda7964d2f9b563c9ddcdf0fa38) or the RSP will overflow and crash the game (a tile is roughly each 2kb portion of the image, the number of tiles in an image is about `ceil(height / ceil(2048 / width))` )
-- Adding more sounds and music increases the size of the sound tables and thus requires increasing the audio heap size to prevent heap overflow. Effects and music are both triggered in the game by a sequence number. These numbers must be unique. The extracted files include them as `SFX_###.WAV` and `MUS_###.WAV`. New effects and music should have names in this format starting from the last number (117 for the base game)
-- Maps *must* be in native N64 format. Map conversion is currently outside the scope of this tool.
-- The order of textures and flats is significant since maps uses indexes instead of names. Textures and flats used by the base game will automatically have their order preserved when building a WAD. New textures and flats will be sorted by name and placed after all the base resources.
+- Sprites larger than 15 tiles require support with a
+  [patch](https://github.com/9nova/doom64ultra/commit/07ef2794cefa5cda7964d2f9b563c9ddcdf0fa38)
+  or the RSP will overflow and crash the game (a tile is each scanline-rounded
+  2kb portion of the image to fit in TMEM, thus the number of tiles in an image
+  is roughly `ceil(height / floor(2048 / width))` )
+- Adding more sounds and music increases the size of the audio tables and thus
+  requires increasing the audio heap size to prevent heap overflow. Effects and
+  music are both triggered in the game by a sequence number. These numbers must
+  be unique. The extracted files include them as `SFX_###.WAV` and
+  `MUS_###.WAV`. New effects and music should have names in this format
+  starting from one after the last number (117 for the base game)
+- Maps *must* be in native N64 format. Map conversion is currently outside the
+  scope of this tool.
+- The order of textures and flats is significant since maps uses indexes
+  instead of names. Textures and flats used by the base game will automatically
+  have their order preserved when building a WAD. New textures and flats will
+  be sorted by name and placed after all the base resources.
+- Extra soundfonts will all be merged together into the WMD file. The MIDI
+  program and bank numbers are used directly by any MIDI songs you provide.
+  MIDI programs 0-53 are used by the base game so make sure any extra
+  instruments come after this and compose your MIDI songs accordingly. This
+  does mean that General MIDI-compatible soundfonts will conflict with the base
+  game instruments.
