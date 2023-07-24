@@ -84,3 +84,11 @@ can be used to build the Doom 64 sources:
 d64make build ./mymod -o /path/to/DOOM64-RE/data/
 ```
 
+## Notes
+
+Adding new resources has some limitations.
+
+- Sprites larger than 15 tiles require support with a [patch](https://github.com/9nova/doom64ultra/commit/07ef2794cefa5cda7964d2f9b563c9ddcdf0fa38) or the RSP will overflow and crash the game (a tile is roughly each 2kb portion of the image, the number of tiles in an image is about `ceil(height / ceil(2048 / width))` )
+- Adding more sounds and music increases the size of the sound tables and thus requires increasing the audio heap size to prevent heap overflow. Effects and music are both triggered in the game by a sequence number. These numbers must be unique. The extracted files include them as `SFX_###.WAV` and `MUS_###.WAV`. New effects and music should have names in this format starting from the last number (117 for the base game)
+- Maps *must* be in native N64 format. Map conversion is currently outside the scope of this tool.
+- The order of textures and flats is significant since maps uses indexes instead of names. Textures and flats used by the base game will automatically have their order preserved when building a WAD. New textures and flats will be sorted by name and placed after all the base resources.
