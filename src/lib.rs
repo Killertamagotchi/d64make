@@ -13,16 +13,48 @@ mod wad;
 pub use wad::*;
 
 #[inline]
-fn too_large(input: &[u8]) -> nom::Err<nom::error::Error<&[u8]>> {
-    nom::Err::Error(nom::error::Error::new(
+fn too_large<'a, E: nom::error::ParseError<&'a [u8]>>(input: &'a [u8]) -> nom::Err<E> {
+    nom::Err::Error(nom::error::make_error(
         input,
         nom::error::ErrorKind::TooLarge,
     ))
 }
 
 #[inline]
-fn nom_fail(input: &[u8]) -> nom::Err<nom::error::Error<&[u8]>> {
-    nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Fail))
+fn nom_fail<'a, E: nom::error::ParseError<&'a [u8]>>(input: &'a [u8]) -> nom::Err<E> {
+    nom::Err::Error(nom::error::make_error(input, nom::error::ErrorKind::Fail))
+}
+
+fn convert_error<I: std::ops::Deref<Target = [u8]>>(
+    input: I,
+    e: nom::Err<nom::error::VerboseError<I>>,
+) -> String {
+    use std::fmt::Write;
+
+    let e = match e {
+        nom::Err::Incomplete(nom::Needed::Unknown) => return "Incomplete".into(),
+        nom::Err::Incomplete(nom::Needed::Size(n)) => return format!("Need {n} more bytes"),
+        nom::Err::Error(e) | nom::Err::Failure(e) => e,
+    };
+    let mut result = String::new();
+    for (i, (substring, kind)) in e.errors.iter().enumerate() {
+        let offset = nom::Offset::offset(&*input, substring);
+
+        if i == 0 {
+            write!(&mut result, "Parse error at position 0x{offset:x}")
+        } else {
+            write!(&mut result, ", 0x{offset:x}")
+        }
+        .unwrap();
+
+        match kind {
+            nom::error::VerboseErrorKind::Char(_) => unreachable!(),
+            nom::error::VerboseErrorKind::Context(context) => write!(&mut result, " in {context}",),
+            nom::error::VerboseErrorKind::Nom(err) => write!(&mut result, " ({err:?})",),
+        }
+        .unwrap();
+    }
+    result
 }
 
 #[inline]

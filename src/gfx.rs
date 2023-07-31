@@ -3,9 +3,10 @@ use arrayvec::ArrayVec;
 use nom::{
     bytes::complete::{tag, take, take_while},
     combinator::{eof, map_res},
+    error::{FromExternalError, ParseError},
     number::complete::{be_i16, be_i32, be_u16},
 };
-use std::{collections::HashMap, io};
+use std::{collections::HashMap, io, num::TryFromIntError};
 
 #[allow(clippy::upper_case_acronyms)]
 pub type RGBA = rgb::RGBA8;
@@ -277,7 +278,10 @@ pub struct Graphic {
 }
 
 impl Graphic {
-    pub fn parse(data: &[u8], typ: LumpType) -> nom::IResult<&[u8], Self> {
+    pub fn parse<'a, E: ParseError<&'a [u8]>>(
+        data: &'a [u8],
+        typ: LumpType,
+    ) -> nom::IResult<&'a [u8], Self, E> {
         let _len = data.len();
         let (data, _) = be_i16(data)?;
         let (data, _) = be_u16(data)?;
@@ -434,7 +438,7 @@ pub struct Texture {
 }
 
 impl Texture {
-    pub fn parse(data: &[u8]) -> nom::IResult<&[u8], Self> {
+    pub fn parse<'a, E: ParseError<&'a [u8]>>(data: &'a [u8]) -> nom::IResult<&'a [u8], Self, E> {
         let (data, _) = be_u16(data)?;
         let (data, _) = be_u16(data)?;
 
@@ -523,7 +527,7 @@ impl Texture {
             .chain(info.try_unknown_chunks(lodepng::ChunkPosition::IDAT))
             .filter_map(|c| c.ok())
             .filter(|c| c.is_type(b"sPLT"))
-            .filter_map(|c| parse_splt(c.data()).map(|r| r.1).ok())
+            .filter_map(|c| parse_splt::<(), 16>(c.data()).map(|r| r.1).ok())
             .collect::<Vec<_>>();
 
         for palette in info.color.palette().chunks_exact(16).rev() {
@@ -582,7 +586,9 @@ impl From<&Texture> for Vec<u8> {
     }
 }
 
-fn parse_splt<const N: usize>(data: &[u8]) -> nom::IResult<&[u8], [RGBA; N]> {
+fn parse_splt<'a, E: ParseError<&'a [u8]>, const N: usize>(
+    data: &'a [u8],
+) -> nom::IResult<&'a [u8], [RGBA; N], E> {
     let mut palette = [RGBA::default(); N];
     let mut pc = 0usize;
     let (data, _name) = take_while(|c| c != b'\0')(data)?;
@@ -616,7 +622,7 @@ pub struct Sprite {
 }
 
 impl Sprite {
-    pub fn parse(data: &[u8]) -> nom::IResult<&[u8], Self> {
+    pub fn parse<'a, E: ParseError<&'a [u8]>>(data: &'a [u8]) -> nom::IResult<&'a [u8], Self, E> {
         let (data, _num_tiles) = be_u16(data)?;
         let (data, rgb8) = be_i16(data)?;
         let (data, paloffset) = be_u16(data)?;
@@ -762,7 +768,7 @@ impl Sprite {
         let depth = info.color.bitdepth();
         let (x_offset, y_offset) = info
             .get(b"grAb")
-            .and_then(|grab| parse_grab(grab.data()).ok().map(|r| r.1))
+            .and_then(|grab| parse_grab::<()>(grab.data()).ok().map(|r| r.1))
             .unwrap_or_default();
         if info.color.colortype() == lodepng::ColorType::RGBA && depth == 8 {
             if convert == Some(8) {
@@ -891,7 +897,9 @@ impl From<&Sprite> for Vec<u8> {
     }
 }
 
-fn parse_grab(data: &[u8]) -> nom::IResult<&[u8], (i16, i16)> {
+fn parse_grab<'a, E: ParseError<&'a [u8]> + FromExternalError<&'a [u8], TryFromIntError>>(
+    data: &'a [u8],
+) -> nom::IResult<&'a [u8], (i16, i16), E> {
     let (data, x) = map_res(be_i32, i16::try_from)(data)?;
     let (data, y) = map_res(be_i32, i16::try_from)(data)?;
     let (data, _) = eof(data)?;

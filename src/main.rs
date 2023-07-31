@@ -1,4 +1,5 @@
 use d64make::*;
+use std::process::ExitCode;
 
 #[derive(clap::Parser)]
 struct Args {
@@ -19,7 +20,7 @@ enum Commands {
     Inspect(inspect::Args),
 }
 
-fn main() -> std::io::Result<()> {
+fn main() -> ExitCode {
     let args: Args = clap::Parser::parse();
 
     let level = match args.verbose {
@@ -33,9 +34,16 @@ fn main() -> std::io::Result<()> {
         .target(pretty_env_logger::env_logger::Target::Stdout)
         .init();
 
-    match args.command {
+    let res = match args.command {
         Commands::Extract(args) => extract::extract(args),
         Commands::Build(args) => build::build(args),
         Commands::Inspect(args) => inspect::inspect(args),
+    };
+    match res {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            log::error!("{e}");
+            ExitCode::FAILURE
+        }
     }
 }

@@ -1,7 +1,9 @@
 use std::{collections::HashMap, io::Cursor};
 
+use nom::error::context;
+
 use crate::{
-    invalid_data,
+    convert_error, invalid_data,
     sound::{Loop, SoundData},
     wad::{FlatWad, LumpType},
 };
@@ -39,9 +41,9 @@ fn unhash_texture(tex: &mut [u8], hashes: &HashMap<u16, u16>) {
 
 /// Convert the 2020 remaster WAD back to N64 format
 pub fn read_wad(data: &[u8], mut snd: Option<&mut SoundData>) -> std::io::Result<FlatWad> {
-    let mut wad = FlatWad::parse(data, false)
-        .map(|w| w.1)
-        .map_err(invalid_data)?;
+    let mut wad = context("WAD", |d| FlatWad::parse(d, false))(data)
+        .map_err(|e| invalid_data(convert_error(data, e)))?
+        .1;
     let mut remove_ranges = Vec::with_capacity(3);
     let mut cur_start = None;
     let mut in_section = LumpType::Unknown;
@@ -132,8 +134,10 @@ pub fn read_wad(data: &[u8], mut snd: Option<&mut SoundData>) -> std::io::Result
                     entry.entry.data = gfx.to_vec(entry.entry.typ);
                 }
                 LumpType::Map => {
-                    let (_, mut map) =
-                        FlatWad::parse(&std::mem::take(&mut entry.entry.data), false).unwrap();
+                    let d = std::mem::take(&mut entry.entry.data);
+                    let mut map = context("Map WAD", |d| FlatWad::parse(d, false))(&d)
+                        .map_err(|e| invalid_data(convert_error(data, e)))?
+                        .1;
                     let sectors = map
                         .entries
                         .iter_mut()
@@ -184,8 +188,10 @@ pub fn read_wad(data: &[u8], mut snd: Option<&mut SoundData>) -> std::io::Result
                         .strip_prefix(b"SFX_")
                         .and_then(|n| str::parse(std::str::from_utf8(n).ok()?).ok())
                     {
-                        let (_, mut sample) =
-                            crate::sound::Sample::read_wav(&entry.entry.data).unwrap();
+                        let mut sample =
+                            context("WAV", crate::sound::Sample::read_wav)(&entry.entry.data)
+                                .map_err(|e| invalid_data(convert_error(data, e)))?
+                                .1;
                         if id == 112 {
                             sample.info.r#loop = Some(Loop {
                                 count: u32::MAX,
@@ -239,7 +245,8 @@ pub fn read_wad(data: &[u8], mut snd: Option<&mut SoundData>) -> std::io::Result
 }
 
 pub fn read_dls(data: &[u8], snd: &mut SoundData) -> std::io::Result<()> {
-    snd.read_dls(data).map_err(invalid_data)?;
+    snd.read_dls(data)
+        .map_err(|e| invalid_data(convert_error(data, e)))?;
     for seq in snd.sequences.values_mut() {
         if let crate::sound::Sequence::Effect(samp) = seq {
             if let Some(r#loop) = &mut samp.info.r#loop {

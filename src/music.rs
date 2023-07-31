@@ -3,6 +3,7 @@ use binwrite::BinWrite;
 use ghakuf::formats::{VLQBuilder, VLQ};
 use nom::{
     bytes::complete::{tag, take},
+    error::ParseError,
     multi::count,
     number::complete::{be_u16, be_u32, be_u8},
 };
@@ -822,7 +823,9 @@ pub struct TimedEvent {
     pub event: Event,
 }
 
-pub fn extract_sequences(data: &[u8]) -> nom::IResult<&[u8], BTreeMap<u16, Sequence>> {
+pub fn extract_sequences<'a, E: ParseError<&'a [u8]>>(
+    data: &'a [u8],
+) -> nom::IResult<&'a [u8], BTreeMap<u16, Sequence>, E> {
     let (data, _) = tag(b"SSEQ")(data)?;
     let (data, _) = tag(&(2u32).to_be_bytes())(data)?;
     let (data, _) = take(6usize)(data)?;

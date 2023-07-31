@@ -1,5 +1,7 @@
 #![allow(clippy::needless_range_loop)]
 
+use nom::error::ParseError;
+
 use crate::sound::{AdpcmBook, Loop};
 use std::borrow::Cow;
 
@@ -9,16 +11,21 @@ extern "C" {
     fn EncodeJaguar(input: *const u8, inputlen: usize, output: *mut u8, outputlen: usize) -> isize;
 }
 
-pub(crate) fn decode_jaguar(input: &[u8], cap: usize) -> nom::IResult<&[u8], Vec<u8>> {
+pub(crate) fn decode_jaguar<'a, E: ParseError<&'a [u8]>>(
+    input: &'a [u8],
+    cap: usize,
+) -> nom::IResult<&'a [u8], Vec<u8>, E> {
     let mut get_id_byte = 0u8;
     let mut id_byte = 0;
     let mut iter = input.iter().copied();
     let mut count = 0;
     let mut next = || {
-        let b = iter.next().ok_or(nom::Err::Error(nom::error::Error::new(
-            &input[count..],
-            nom::error::ErrorKind::Eof,
-        )))?;
+        let b = iter.next().ok_or_else(|| {
+            nom::Err::Error(nom::error::make_error(
+                &input[count..],
+                nom::error::ErrorKind::Eof,
+            ))
+        })?;
         count += 1;
         Ok(b)
     };
@@ -82,7 +89,10 @@ pub(crate) fn encode_jaguar(input: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(output)
 }
 
-pub(crate) fn decode_d64(input: &[u8], cap: usize) -> nom::IResult<&[u8], Vec<u8>> {
+pub(crate) fn decode_d64<'a, E: ParseError<&'a [u8]>>(
+    input: &'a [u8],
+    cap: usize,
+) -> nom::IResult<&'a [u8], Vec<u8>, E> {
     let mut output = Vec::with_capacity(cap);
     unsafe {
         let res = DecodeD64(input.as_ptr(), input.len(), output.as_mut_ptr(), cap);

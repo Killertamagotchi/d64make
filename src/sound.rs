@@ -1,9 +1,10 @@
-use crate::{music::MusicSequence, too_large};
+use crate::{convert_error, invalid_data, music::MusicSequence, too_large};
 use binread::BinRead;
 use binwrite::BinWrite;
 use nom::{
     branch::alt,
     bytes::complete::{tag, take},
+    error::{context, ParseError},
     multi::{count, fill},
     number::complete::{be_i16, be_i32, be_u16, be_u32, le_i16, le_i8, le_u32, le_u8},
 };
@@ -194,7 +195,10 @@ pub struct AdpcmBook {
 }
 
 #[inline]
-pub fn parse_riff_header<'a>(data: &'a [u8], name: &[u8; 4]) -> nom::IResult<&'a [u8], ()> {
+pub fn parse_riff_header<'a, E: ParseError<&'a [u8]>>(
+    data: &'a [u8],
+    name: &[u8; 4],
+) -> nom::IResult<&'a [u8], (), E> {
     let (data, _) = tag(b"RIFF")(data)?;
     let (data, riffsize) = le_u32(data)?;
     let data = &data[..riffsize as usize];
@@ -203,10 +207,10 @@ pub fn parse_riff_header<'a>(data: &'a [u8], name: &[u8; 4]) -> nom::IResult<&'a
 }
 
 #[inline]
-pub fn parse_riff_chunks<'a>(
+pub fn parse_riff_chunks<'a, E: ParseError<&'a [u8]>>(
     mut data: &'a [u8],
-    mut f: impl FnMut([u8; 4], &'a [u8]) -> nom::IResult<&'a [u8], ()>,
-) -> nom::IResult<&'a [u8], ()> {
+    mut f: impl FnMut([u8; 4], &'a [u8]) -> nom::IResult<&'a [u8], (), E>,
+) -> nom::IResult<&'a [u8], (), E> {
     while !data.is_empty() {
         let (d, chunk_name) = take(4usize)(data)?;
         let (d, chunk_size) = le_u32(d)?;
@@ -229,7 +233,9 @@ pub fn cents_to_samplerate(cents: i32) -> u32 {
 }
 
 impl Sample {
-    pub fn read_wav(data: &[u8]) -> nom::IResult<&[u8], Self> {
+    pub fn read_wav<'a, E: ParseError<&'a [u8]>>(
+        data: &'a [u8],
+    ) -> nom::IResult<&'a [u8], Self, E> {
         let mut samplesize = 0;
         let mut samplerate = 0;
         let mut volume = 127;
@@ -290,10 +296,7 @@ impl Sample {
                 }
                 b"data" => {
                     if samplesize == 0 {
-                        return Err(nom::Err::Error(nom::error::Error::new(
-                            chunk,
-                            nom::error::ErrorKind::Fail,
-                        )));
+                        return Err(crate::nom_fail(chunk));
                     }
                     if samplesize == 1 {
                         let mut cvt = Vec::with_capacity(chunk.len());
@@ -312,10 +315,7 @@ impl Sample {
         let samples = match samples {
             Some(samples) => samples,
             None => {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    data,
-                    nom::error::ErrorKind::Fail,
-                )))
+                return Err(crate::nom_fail(data));
             }
         };
         Ok((
@@ -414,11 +414,10 @@ fn align8_slice(data: &[u8], init_size: usize) -> &[u8] {
     data.get(offset..).unwrap_or_default()
 }
 
-pub fn extract_sound<'a>(
+fn extract_instruments<'a, E: ParseError<&'a [u8]>>(
     wmd: &'a [u8],
-    wsd: &'a [u8],
-    wdd: &'a [u8],
-) -> nom::IResult<&'a [u8], SoundData> {
+    wdd: &[u8],
+) -> nom::IResult<&'a [u8], BTreeMap<u16, Instrument>, E> {
     let start = wmd.len();
 
     let (wmd, _) = tag(b"SN64")(wmd)?;
@@ -498,7 +497,7 @@ pub fn extract_sound<'a>(
         let base = base as usize;
         let samp = wdd
             .get(base..base + len as usize)
-            .ok_or_else(|| too_large(&[]))?
+            .ok_or_else(|| crate::nom_fail(wmd))?
             .to_vec();
         wmd = d;
         //println!("sample ty {type} size {len} pitch {pitch} loop {loop}");
@@ -619,8 +618,18 @@ pub fn extract_sound<'a>(
         instruments.insert(index as u16, instrument);
     }
 
+    Ok((wmd, instruments))
+}
+
+pub fn extract_sound(wmd: &[u8], wsd: &[u8], wdd: &[u8]) -> std::io::Result<SoundData> {
+    let mut instruments = context("WMD", |wmd| extract_instruments(wmd, wdd))(wmd)
+        .map_err(|e| invalid_data(convert_error(wmd, e)))?
+        .1;
+
     // detect SNDFX_CLASS sequences
-    let mut sequences = crate::music::extract_sequences(wsd)?.1;
+    let mut sequences = context("WSD", crate::music::extract_sequences)(wsd)
+        .map_err(|e| invalid_data(convert_error(wmd, e)))?
+        .1;
     for (index, seq) in sequences.iter_mut() {
         let mus = match seq {
             Sequence::Music(mus) => mus,
@@ -638,8 +647,6 @@ pub fn extract_sound<'a>(
                     priority: 99,
                 });
             } else {
-                let sample_id = inst.patchmaps[0].sample_id;
-                samples.remove(&sample_id);
                 let info = inst.patchmaps[0]
                     .sample
                     .take()
@@ -656,13 +663,10 @@ pub fn extract_sound<'a>(
         }
     }
 
-    Ok((
-        &[],
-        SoundData {
-            instruments,
-            sequences,
-        },
-    ))
+    Ok(SoundData {
+        instruments,
+        sequences,
+    })
 }
 
 impl SoundData {

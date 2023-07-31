@@ -132,7 +132,11 @@ impl Wad {
             // important: must load and rewrite map wad to have proper 4-byte alignments
             LumpType::Map => match FlatWad::parse(&data, true) {
                 Ok((_, wad)) => replace(&mut self.maps, name, WadEntry::new(typ, wad)),
-                Err(_) => log::warn!("Failed to load map {}", name.display()),
+                Err(e) => log::warn!(
+                    "Failed to load map {}:\n{}",
+                    name.display(),
+                    crate::convert_error(data.as_slice(), e)
+                ),
             },
             LumpType::Palette => {
                 if let Some(data) = data.get(8..8 + 256 * 2) {
@@ -143,48 +147,60 @@ impl Wad {
                     log::warn!("Palette {} does not have enough entries", name.display());
                 }
             }
-            LumpType::Sprite => {
-                if let Ok((_, sprite)) = gfx::Sprite::parse(&data) {
-                    replace(&mut self.sprites, name, WadEntry::new(typ, sprite));
-                } else {
-                    log::warn!("Invalid sprite {}", name.display());
-                }
-            }
-            LumpType::Texture => {
-                if let Ok((_, texture)) = gfx::Texture::parse(&data) {
-                    replace(&mut self.textures, name, WadEntry::new(typ, texture));
-                } else {
-                    log::warn!("Invalid texture {}", name.display());
-                }
-            }
-            LumpType::Flat => {
-                if let Ok((_, flat)) = gfx::Texture::parse(&data) {
-                    replace(&mut self.flats, name, WadEntry::new(typ, flat));
-                } else {
-                    log::warn!("Invalid flat {}", name.display());
-                }
-            }
+            LumpType::Sprite => match gfx::Sprite::parse(&data) {
+                Ok((_, sprite)) => replace(&mut self.sprites, name, WadEntry::new(typ, sprite)),
+                Err(e) => log::warn!(
+                    "Invalid sprite {}:\n{}",
+                    name.display(),
+                    crate::convert_error(data.as_slice(), e)
+                ),
+            },
+            LumpType::Texture => match gfx::Texture::parse(&data) {
+                Ok((_, texture)) => replace(&mut self.textures, name, WadEntry::new(typ, texture)),
+                Err(e) => log::warn!(
+                    "Invalid texture {}:\n{}",
+                    name.display(),
+                    crate::convert_error(data.as_slice(), e)
+                ),
+            },
+            LumpType::Flat => match gfx::Texture::parse(&data) {
+                Ok((_, flat)) => replace(&mut self.flats, name, WadEntry::new(typ, flat)),
+                Err(e) => log::warn!(
+                    "Invalid flat {}:\n{}",
+                    name.display(),
+                    crate::convert_error(data.as_slice(), e)
+                ),
+            },
             LumpType::Graphic | LumpType::Fire | LumpType::Cloud => {
-                if let Ok((_, graphic)) = gfx::Graphic::parse(&data, typ) {
-                    replace(&mut self.graphics, name, WadEntry::new(typ, graphic));
-                } else {
-                    log::warn!("Invalid graphic {}", name.display());
+                match gfx::Graphic::parse(&data, typ) {
+                    Ok((_, graphic)) => {
+                        replace(&mut self.graphics, name, WadEntry::new(typ, graphic))
+                    }
+                    Err(e) => log::warn!(
+                        "Invalid graphic {}:\n{}",
+                        name.display(),
+                        crate::convert_error(data.as_slice(), e)
+                    ),
                 }
             }
-            LumpType::HudGraphic => {
-                if let Ok((_, sprite)) = gfx::Sprite::parse(&data) {
-                    replace(&mut self.hud_graphics, name, WadEntry::new(typ, sprite));
-                } else {
-                    log::warn!("Invalid HUD graphic {}", name.display());
+            LumpType::HudGraphic => match gfx::Sprite::parse(&data) {
+                Ok((_, sprite)) => {
+                    replace(&mut self.hud_graphics, name, WadEntry::new(typ, sprite))
                 }
-            }
-            LumpType::Sky => {
-                if let Ok((_, sprite)) = gfx::Sprite::parse(&data) {
-                    replace(&mut self.skies, name, WadEntry::new(typ, sprite));
-                } else {
-                    log::warn!("Invalid sky {}", name.display());
-                }
-            }
+                Err(e) => log::warn!(
+                    "Invalid HUD graphic {}:\n{}",
+                    name.display(),
+                    crate::convert_error(data.as_slice(), e)
+                ),
+            },
+            LumpType::Sky => match gfx::Sprite::parse(&data) {
+                Ok((_, sprite)) => replace(&mut self.skies, name, WadEntry::new(typ, sprite)),
+                Err(e) => log::warn!(
+                    "Invalid sky {}:\n{}",
+                    name.display(),
+                    crate::convert_error(data.as_slice(), e)
+                ),
+            },
             LumpType::Marker => {}
             _ => replace(&mut self.other, name, WadEntry::new(typ, data)),
         }

@@ -1,4 +1,5 @@
 use crate::{
+    convert_error,
     extract::read_rom_or_iwad,
     gfx, invalid_data,
     sound::SoundData,
@@ -126,10 +127,11 @@ fn load_entries(
                             .map(|p| *p.0 + 1)
                             .unwrap_or_default()
                     });
-                let (_, sample) = crate::sound::Sample::read_wav(&data).unwrap_or_else(|_| {
+                let (_, sample) = crate::sound::Sample::read_wav(&data).unwrap_or_else(|e| {
                     panic!(
-                        "Failed to load WAV file `{}`. WAV must be uncompressed 16-bit mono or 8-bit mono.",
+                        "Failed to load WAV file `{}`:\n{}\nWAV must be uncompressed 16-bit mono or 8-bit mono.",
                         path.display(),
+                        convert_error(data.as_slice(), e)
                     );
                 });
                 snd.sequences
@@ -141,8 +143,12 @@ fn load_entries(
                 } else {
                     snd.read_sf2(&data)
                 };
-                res.unwrap_or_else(|_| {
-                    panic!("Failed to load SoundFont `{}`.", path.display(),);
+                res.unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to load SoundFont `{}`:\n{}",
+                        path.display(),
+                        convert_error(data.as_slice(), e)
+                    );
                 });
             }
             Sequence => {

@@ -1,5 +1,6 @@
 use arrayvec::ArrayVec;
 use itertools::Itertools;
+use nom::error::{context, VerboseError};
 use std::{
     borrow::Cow,
     collections::BTreeMap,
@@ -8,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    gfx, invalid_data,
+    convert_error, gfx, invalid_data,
     sound::{SampleData, SoundData},
     Compression, FlatEntry, FlatWad, LumpType, WadEntry,
 };
@@ -133,18 +134,19 @@ const ROMDATA_JP: RomData<'static> = RomData {
 };
 
 impl FlatWad {
-    pub fn parse(wad: &[u8], n64: bool) -> nom::IResult<&[u8], Self> {
+    pub fn parse(wad: &[u8], n64: bool) -> nom::IResult<&[u8], Self, VerboseError<&[u8]>> {
         use nom::branch::alt;
         use nom::bytes::complete::{tag, take};
         use nom::number::complete::le_u32;
         use LumpType::*;
 
-        let (count, offset) = {
-            let (data, _) = alt((tag("PWAD"), tag("IWAD")))(wad)?;
+        let (count, offset) = context("WAD Header", |data| {
+            let (data, _) = alt((tag("PWAD"), tag("IWAD")))(data)?;
             let (data, count) = le_u32(data)?;
-            let (_, offset) = le_u32(data)?;
-            (count, offset as usize)
-        };
+            let (data, offset) = le_u32(data)?;
+            Ok((data, (count, offset as usize)))
+        })(wad)?
+        .1;
         let mut table = &wad[offset..];
         let mut entries = Vec::new();
         let mut base_typ = Unknown;
@@ -225,10 +227,16 @@ impl FlatWad {
                         wad[start..end].to_owned()
                     }
                     Compression::Lzss(_) => {
-                        crate::compression::decode_jaguar(&wad[start..], size as usize)?.1
+                        context("Jag Decompression", |d| {
+                            crate::compression::decode_jaguar(d, size as usize)
+                        })(&wad[start..])?
+                        .1
                     }
                     Compression::Huffman(_) => {
-                        crate::compression::decode_d64(&wad[start..], size as usize)?.1
+                        context("D64 Decompression", |d| {
+                            crate::compression::decode_d64(d, size as usize)
+                        })(&wad[start..])?
+                        .1
                     }
                 }
             } else {
@@ -244,7 +252,7 @@ impl FlatWad {
             });
             table = t;
         }
-        Ok((&[], Self { entries }))
+        Ok((table, Self { entries }))
     }
     pub fn extract_one(
         &self,
@@ -267,20 +275,24 @@ impl FlatWad {
                 gfx::palette_16_to_rgb(&data[..colors * 2], &mut palette);
                 Cow::Owned(palette)
             }
-            Graphic | Fire | Cloud => gfx::Graphic::parse(&entry.data, entry.typ)
-                .map_err(invalid_data)
+            Graphic | Fire | Cloud => {
+                context("Graphic", |d| gfx::Graphic::parse(d, entry.typ))(&entry.data)
+                    .map_err(|e| invalid_data(convert_error(entry.data.as_slice(), e)))
+                    .and_then(|r| r.1.write_png().map_err(invalid_data))
+                    .map(Cow::Owned)?
+            }
+            Texture | Flat => context("Texture", gfx::Texture::parse)(&entry.data)
+                .map_err(|e| invalid_data(convert_error(entry.data.as_slice(), e)))
                 .and_then(|r| r.1.write_png().map_err(invalid_data))
                 .map(Cow::Owned)?,
-            Texture | Flat => gfx::Texture::parse(&entry.data)
-                .map_err(invalid_data)
-                .and_then(|r| r.1.write_png().map_err(invalid_data))
-                .map(Cow::Owned)?,
-            HudGraphic | Sky => gfx::Sprite::parse(&entry.data)
-                .map_err(invalid_data)
+            HudGraphic | Sky => context("Sky", gfx::Sprite::parse)(&entry.data)
+                .map_err(|e| invalid_data(convert_error(entry.data.as_slice(), e)))
                 .and_then(|r| r.1.write_png(None).map_err(invalid_data))
                 .map(Cow::Owned)?,
             Sprite => {
-                let sprite = gfx::Sprite::parse(&entry.data).map_err(invalid_data)?.1;
+                let sprite = context("Sprite", gfx::Sprite::parse)(&entry.data)
+                    .map_err(|e| invalid_data(convert_error(entry.data.as_slice(), e)))?
+                    .1;
                 let palette = if let gfx::SpritePalette::Offset(offset) = &sprite.palette {
                     use std::collections::btree_map::Entry;
 
@@ -310,7 +322,9 @@ impl FlatWad {
                                 }
                                 Sprite => {
                                     let pspr = gfx::Sprite::parse(&palentry.entry.data)
-                                        .map_err(invalid_data)?
+                                        .map_err(|e| {
+                                            invalid_data(convert_error(entry.data.as_slice(), e))
+                                        })?
                                         .1;
                                     let palette = match &pspr.palette {
                                         gfx::SpritePalette::Rgb8(palette) => palette.to_vec(),
@@ -408,11 +422,7 @@ pub fn read_rom_or_iwad(
             let wmd = read_sound_data(&ext.wmd, path, "WMD")?;
             let wsd = read_sound_data(&ext.wsd, path, "WSD")?;
             let wdd = read_sound_data(&ext.wdd, path, "WDD")?;
-            snd = Some(
-                crate::sound::extract_sound(&wmd, &wsd, &wdd)
-                    .map(|w| w.1)
-                    .map_err(invalid_data)?,
-            );
+            snd = Some(crate::sound::extract_sound(&wmd, &wsd, &wdd)?);
         }
     } else {
         let end = file.seek(io::SeekFrom::End(0))?;
@@ -440,7 +450,7 @@ pub fn read_rom_or_iwad(
         let digest = <sha2::Sha256 as sha2::Digest>::digest(&rom);
         if digest.as_slice() != data.sha256 {
             return Err(invalid_data(format_args!(
-                "Bad sha256 hash {}, expected {}",
+                "Bad sha256 hash {:x}, expected {:x}",
                 digest.iter().format(""),
                 data.sha256.iter().format(""),
             )));
@@ -452,11 +462,7 @@ pub fn read_rom_or_iwad(
             let wmd = read_rom_data(&rom, data.wmd_offset, data.wmd_size);
             let wsd = read_rom_data(&rom, data.wsd_offset, data.wsd_size);
             let wdd = read_rom_data(&rom, data.wdd_offset, data.wdd_size);
-            snd = Some(
-                crate::sound::extract_sound(wmd, wsd, wdd)
-                    .map(|w| w.1)
-                    .map_err(invalid_data)?,
-            );
+            snd = Some(crate::sound::extract_sound(wmd, wsd, wdd)?);
         }
         log::info!(
             "Loaded ROM `{}`: {region:?} v1.{revision}",
@@ -507,11 +513,13 @@ pub fn read_rom_or_iwad(
             }
             Some(wad)
         } else {
-            Some(
-                FlatWad::parse(&wad, true)
-                    .map(|w| w.1)
-                    .map_err(invalid_data)?,
-            )
+            Some(FlatWad::parse(&wad, true).map(|w| w.1).map_err(|e| {
+                invalid_data(format!(
+                    "Failed reading {}:\n{}",
+                    path.display(),
+                    convert_error(wad.as_slice(), e)
+                ))
+            })?)
         }
     } else {
         None

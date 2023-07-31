@@ -10,16 +10,17 @@ use itertools::Itertools;
 use nom::{
     branch::alt,
     bytes::complete::{tag, take},
+    error::ParseError,
     multi::count,
     number::complete::{le_i16, le_i32, le_i8, le_u16, le_u32, le_u8},
 };
 
 #[inline]
-fn parse_2d_list<'a>(
+fn parse_2d_list<'a, E: ParseError<&'a [u8]>>(
     data: &'a [u8],
     name: &[u8; 4],
-    mut f: impl FnMut(&'a [u8]) -> nom::IResult<&'a [u8], ()>,
-) -> nom::IResult<&'a [u8], ()> {
+    mut f: impl FnMut(&'a [u8]) -> nom::IResult<&'a [u8], (), E>,
+) -> nom::IResult<&'a [u8], (), E> {
     parse_riff_chunks(data, |chunk_name, chunk| {
         if chunk_name == *b"LIST" {
             let (chunk, list_name) = take(4usize)(chunk)?;
@@ -32,7 +33,10 @@ fn parse_2d_list<'a>(
 }
 
 impl SoundData {
-    pub fn read_dls<'a>(&mut self, data: &'a [u8]) -> nom::IResult<&'a [u8], ()> {
+    pub fn read_dls<'a, E: ParseError<&'a [u8]>>(
+        &mut self,
+        data: &'a [u8],
+    ) -> nom::IResult<&'a [u8], (), E> {
         let mut ptbl = None;
         let mut wvpl = None;
         let mut lins = Vec::new(); // (patch, regions, articulators)
@@ -253,7 +257,10 @@ impl SoundData {
         }
         Ok((data, ()))
     }
-    pub fn read_sf2<'a>(&mut self, data: &'a [u8]) -> nom::IResult<&'a [u8], ()> {
+    pub fn read_sf2<'a, E: ParseError<&'a [u8]>>(
+        &mut self,
+        data: &'a [u8],
+    ) -> nom::IResult<&'a [u8], (), E> {
         let mut smpl = None;
         let mut phdr = None;
         let mut pbag = None;
@@ -789,7 +796,10 @@ impl DLSConn {
     const DST_EG1_RELEASETIME: u16 = 0x0209;
     const DST_EG1_SUSTAINLEVEL: u16 = 0x020a;
 }
-fn parse_dls_articulator<'a>(chunk: &'a [u8], map: &mut PatchMap) -> nom::IResult<&'a [u8], ()> {
+fn parse_dls_articulator<'a, E: ParseError<&'a [u8]>>(
+    chunk: &'a [u8],
+    map: &mut PatchMap,
+) -> nom::IResult<&'a [u8], (), E> {
     let (chunk, art1_size) = le_u32(chunk)?;
     let (mut chunk, head) = take(art1_size.saturating_sub(4))(chunk)?;
     let (_, nconnections) = le_u32(head)?;
@@ -831,11 +841,11 @@ fn atten_to_vol(cb: i32) -> u8 {
         .clamp(0.0, 127.0) as u8
 }
 
-fn parse_dls_wsmp<'a>(
+fn parse_dls_wsmp<'a, E: ParseError<&'a [u8]>>(
     chunk: &'a [u8],
     map: &mut PatchMap,
     r#loop: &mut Option<Loop>,
-) -> nom::IResult<&'a [u8], ()> {
+) -> nom::IResult<&'a [u8], (), E> {
     let (chunk, wsmp_size) = le_u32(chunk)?;
     let (mut chunk, head) = take(wsmp_size.saturating_sub(4))(chunk)?;
     let (head, unitynote) = le_u16(head)?;
