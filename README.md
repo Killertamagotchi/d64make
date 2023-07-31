@@ -48,7 +48,7 @@ quality sound files.
 To simplify workflows, d64make only supports reading/merging WADs that are
 already in the N64 data format. It does not support WADs in the PC Doom format.
 To merge in custom resources, d64make can load and extract individual assets
-from a directory tree with a specific structure.
+from a directory tree or ZIP/PK3 file with a specific structure.
 
 | Folder | Formats | Notes |
 |-:|-|-|
@@ -82,7 +82,10 @@ can be used to build the Doom 64 sources:
 | DOOM64.WMD | Instrument Definitions |
 
 ```sh
+# Resources stored in folder
 d64make build ./mymod -o /path/to/DOOM64-RE/data/
+# Resources stored in PK3 file
+d64make build ./mymod.pk3 -o /path/to/DOOM64-RE/data/
 ```
 
 ## Notes

@@ -40,6 +40,158 @@ pub struct Args {
     wsd: Option<PathBuf>,
 }
 
+fn load_entry(
+    wad: &mut Wad,
+    snd: &mut SoundData,
+    path: impl AsRef<Path>,
+    read: impl FnOnce() -> io::Result<Vec<u8>>,
+    excludes: &[String],
+    base_typ: LumpType,
+) -> io::Result<()> {
+    use LumpType::*;
+
+    let path = path.as_ref();
+    let name = match path.file_stem() {
+        Some(n) => n,
+        None => return Ok(()),
+    };
+    let name_str = name.to_string_lossy();
+    if name_str.starts_with('.') || name_str.len() > 8 {
+        return Ok(());
+    }
+    if excludes
+        .iter()
+        .any(|g| glob_match::glob_match(g, &name_str))
+    {
+        log::debug!("Skipping file `{}`", path.display());
+        return Ok(());
+    }
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| e.to_ascii_uppercase());
+    let mut typ = match (base_typ, ext.as_deref()) {
+        (Sprite, Some("LMP") | Some("PAL")) => Palette,
+        (Sequence, Some("SF2") | Some("DLS")) => SoundFont,
+        (Unknown, Some("PNG")) => Graphic,
+        (Unknown, Some("WAD")) => Map,
+        (Unknown, _) if name_str.starts_with("MAP") => Map,
+        (Unknown, _) if name_str.starts_with("DEMO") => Demo,
+        _ => base_typ,
+    };
+    if typ == Sky {
+        if name_str == "FIRE" {
+            typ = Fire;
+        } else if name_str == "CLOUD" {
+            typ = Cloud;
+        }
+    }
+    log::debug!("Reading file `{}` of type {:?}", path.display(), typ);
+    let data = read()?;
+    let is_png = ext.as_deref() == Some("PNG");
+    let data = match (typ, is_png) {
+        (Palette, _) if ext.as_deref() == Some("PAL") => {
+            if data.len() >= 256 * 3 {
+                let mut palette = vec![0; 8 + 256 * 2];
+                palette[2] = 1;
+                gfx::palette_rgb_to_16(&data, &mut palette[8..]);
+                palette
+            } else {
+                panic!("Palette {name_str} does not have enough entries");
+            }
+        }
+        (Graphic | Fire | Cloud, true) => gfx::Graphic::read_png(&data, false)
+            .map_err(invalid_data)?
+            .to_vec(typ),
+        (Texture | Flat, true) => gfx::Texture::read_png(&data)
+            .map_err(invalid_data)?
+            .to_vec(),
+        (Sprite | HudGraphic | Sky, true) => gfx::Sprite::read_png(&data, None)
+            .map_err(invalid_data)
+            .unwrap()
+            .to_vec(),
+        _ => data,
+    };
+    match typ {
+        Sample => {
+            let id = name_str
+                .strip_prefix("SFX_")
+                .and_then(|n| str::parse(n).ok())
+                .unwrap_or_else(|| {
+                    snd.sequences
+                        .last_key_value()
+                        .map(|p| *p.0 + 1)
+                        .unwrap_or_default()
+                });
+            let (_, sample) = crate::sound::Sample::read_wav(&data).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to load WAV file `{}`:\n{}\nWAV must be uncompressed 16-bit mono or 8-bit mono.",
+                    path.display(),
+                    convert_error(data.as_slice(), e)
+                );
+            });
+            snd.sequences
+                .insert(id, crate::sound::Sequence::Effect(sample));
+        }
+        SoundFont => {
+            let res = if ext.as_deref() == Some("DLS") {
+                snd.read_dls(&data)
+            } else {
+                snd.read_sf2(&data)
+            };
+            res.unwrap_or_else(|e| {
+                panic!(
+                    "Failed to load SoundFont `{}`:\n{}",
+                    path.display(),
+                    convert_error(data.as_slice(), e)
+                );
+            });
+        }
+        Sequence => {
+            let id = name_str
+                .strip_prefix("MUS_")
+                .and_then(|n| str::parse(n).ok())
+                .unwrap_or_else(|| {
+                    snd.sequences
+                        .last_key_value()
+                        .map(|p| *p.0 + 1)
+                        .unwrap_or_default()
+                });
+            let seq =
+                crate::music::MusicSequence::read_midi(&mut std::io::Cursor::new(data)).unwrap();
+            snd.sequences.insert(id, crate::sound::Sequence::Music(seq));
+        }
+        _ => {
+            let mut upper = name_str.replace('^', "\\");
+            upper.make_ascii_uppercase();
+            let name = EntryName::new(&upper).unwrap();
+            let entry = WadEntry::new(typ, data);
+            wad.merge_one(name, entry);
+        }
+    }
+    Ok(())
+}
+
+fn type_for_dir(name: &std::ffi::OsStr) -> Option<LumpType> {
+    use LumpType::*;
+
+    let upper = name.to_ascii_uppercase();
+    Some(match upper.to_str() {
+        Some("SPRITES") => Sprite,
+        Some("PALETTES") => Palette,
+        Some("TEXTURES") => Texture,
+        Some("FLATS") => Flat,
+        Some("GRAPHICS") => Graphic,
+        Some("HUD") => HudGraphic,
+        Some("SKIES") => Sky,
+        Some("MAPS") => Map,
+        Some("SOUNDS") => Sample,
+        Some("MUSIC") => Sequence,
+        Some("DEMOS") => Demo,
+        _ => return None,
+    })
+}
+
 fn load_entries(
     wad: &mut Wad,
     snd: &mut SoundData,
@@ -49,151 +201,20 @@ fn load_entries(
     base_typ: LumpType,
     depth: usize,
 ) -> io::Result<()> {
-    use LumpType::*;
-
     let path = path.as_ref();
     let meta = match meta {
         Some(meta) => meta,
         None => path.metadata()?,
     };
     if meta.is_file() {
-        let name = match path.file_stem() {
-            Some(n) => n,
-            None => return Ok(()),
-        };
-        let name_str = name.to_string_lossy();
-        if name_str.starts_with('.') || name_str.len() > 8 {
-            return Ok(());
-        }
-        if excludes
-            .iter()
-            .any(|g| glob_match::glob_match(g, &name_str))
-        {
-            return Ok(());
-        }
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|e| e.to_ascii_uppercase());
-        let mut typ = match (base_typ, ext.as_deref()) {
-            (Sprite, Some("LMP") | Some("PAL")) => Palette,
-            (Sequence, Some("SF2") | Some("DLS")) => SoundFont,
-            (Unknown, Some("PNG")) => Graphic,
-            (Unknown, Some("WAD")) => Map,
-            (Unknown, _) if name_str.starts_with("MAP") => Map,
-            (Unknown, _) if name_str.starts_with("DEMO") => Demo,
-            _ => base_typ,
-        };
-        if typ == Sky {
-            if name_str == "FIRE" {
-                typ = Fire;
-            } else if name_str == "CLOUD" {
-                typ = Cloud;
-            }
-        }
-        let data = std::fs::read(path)?;
-        let is_png = ext.as_deref() == Some("PNG");
-        let data = match (typ, is_png) {
-            (Palette, _) if ext.as_deref() == Some("PAL") => {
-                if data.len() >= 256 * 3 {
-                    let mut palette = vec![0; 8 + 256 * 2];
-                    palette[2] = 1;
-                    gfx::palette_rgb_to_16(&data, &mut palette[8..]);
-                    palette
-                } else {
-                    panic!("Palette {name_str} does not have enough entries");
-                }
-            }
-            (Graphic | Fire | Cloud, true) => gfx::Graphic::read_png(&data, false)
-                .map_err(invalid_data)?
-                .to_vec(typ),
-            (Texture | Flat, true) => gfx::Texture::read_png(&data)
-                .map_err(invalid_data)?
-                .to_vec(),
-            (Sprite | HudGraphic | Sky, true) => gfx::Sprite::read_png(&data, None)
-                .map_err(invalid_data)
-                .unwrap()
-                .to_vec(),
-            _ => data,
-        };
-        match typ {
-            Sample => {
-                let id = name_str
-                    .strip_prefix("SFX_")
-                    .and_then(|n| str::parse(n).ok())
-                    .unwrap_or_else(|| {
-                        snd.sequences
-                            .last_key_value()
-                            .map(|p| *p.0 + 1)
-                            .unwrap_or_default()
-                    });
-                let (_, sample) = crate::sound::Sample::read_wav(&data).unwrap_or_else(|e| {
-                    panic!(
-                        "Failed to load WAV file `{}`:\n{}\nWAV must be uncompressed 16-bit mono or 8-bit mono.",
-                        path.display(),
-                        convert_error(data.as_slice(), e)
-                    );
-                });
-                snd.sequences
-                    .insert(id, crate::sound::Sequence::Effect(sample));
-            }
-            SoundFont => {
-                let res = if ext.as_deref() == Some("DLS") {
-                    snd.read_dls(&data)
-                } else {
-                    snd.read_sf2(&data)
-                };
-                res.unwrap_or_else(|e| {
-                    panic!(
-                        "Failed to load SoundFont `{}`:\n{}",
-                        path.display(),
-                        convert_error(data.as_slice(), e)
-                    );
-                });
-            }
-            Sequence => {
-                let id = name_str
-                    .strip_prefix("MUS_")
-                    .and_then(|n| str::parse(n).ok())
-                    .unwrap_or_else(|| {
-                        snd.sequences
-                            .last_key_value()
-                            .map(|p| *p.0 + 1)
-                            .unwrap_or_default()
-                    });
-                let seq = crate::music::MusicSequence::read_midi(&mut std::io::Cursor::new(data))
-                    .unwrap();
-                snd.sequences.insert(id, crate::sound::Sequence::Music(seq));
-            }
-            _ => {
-                let mut upper = name_str.replace('^', "\\");
-                upper.make_ascii_uppercase();
-                let name = EntryName::new(&upper).unwrap();
-                let entry = WadEntry::new(typ, data);
-                wad.merge_one(name, entry);
-            }
-        }
+        load_entry(wad, snd, path, || std::fs::read(path), excludes, base_typ)?;
     } else if meta.is_dir() {
         let name = match path.file_name() {
             Some(n) => n,
             None => return Ok(()),
         };
-        let lower = name.to_ascii_uppercase();
         let base_typ = if depth < 2 {
-            match lower.to_str() {
-                Some("SPRITES") => Sprite,
-                Some("PALETTES") => Palette,
-                Some("TEXTURES") => Texture,
-                Some("FLATS") => Flat,
-                Some("GRAPHICS") => Graphic,
-                Some("HUD") => HudGraphic,
-                Some("SKIES") => Sky,
-                Some("MAPS") => Map,
-                Some("SOUNDS") => Sample,
-                Some("MUSIC") => Sequence,
-                Some("DEMOS") => Demo,
-                _ => base_typ,
-            }
+            type_for_dir(name).unwrap_or(base_typ)
         } else {
             base_typ
         };
@@ -518,6 +539,35 @@ pub fn build(args: Args) -> io::Result<()> {
             iwad.merge_flat(flat);
             if let Some(isnd) = isnd {
                 snd = isnd;
+            }
+        } else if ext == Some("zip") || ext == Some("pk3") {
+            log::info!("Reading `{}`", input.display());
+            let mut file = std::fs::File::open(&input)?;
+            let mut arc = zip::ZipArchive::new(&mut file).map_err(invalid_data)?;
+            for index in 0..arc.len() {
+                let mut afile = arc.by_index(index).map_err(invalid_data)?;
+                let name = match (afile.is_file(), afile.enclosed_name()) {
+                    (true, Some(name)) => name.to_owned(),
+                    _ => continue,
+                };
+                let typ = name
+                    .ancestors()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .last()
+                    .and_then(|p| type_for_dir(p.as_os_str()))
+                    .unwrap_or(LumpType::Unknown);
+                load_entry(
+                    &mut pwad,
+                    &mut snd,
+                    name,
+                    || {
+                        let mut data = Vec::new();
+                        std::io::Read::read_to_end(&mut afile, &mut data)?;
+                        Ok(data)
+                    },
+                    &exclude,
+                    typ,
+                )?;
             }
         } else {
             log::info!("Reading `{}`", input.display());
