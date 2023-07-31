@@ -3,7 +3,9 @@ use std::{collections::HashMap, io::Cursor};
 use nom::error::context;
 
 use crate::{
-    convert_error, invalid_data,
+    convert_error,
+    extract::WadType,
+    invalid_data,
     sound::{Loop, SoundData},
     wad::{FlatWad, LumpType},
 };
@@ -41,7 +43,7 @@ fn unhash_texture(tex: &mut [u8], hashes: &HashMap<u16, u16>) {
 
 /// Convert the 2020 remaster WAD back to N64 format
 pub fn read_wad(data: &[u8], mut snd: Option<&mut SoundData>) -> std::io::Result<FlatWad> {
-    let mut wad = context("WAD", |d| FlatWad::parse(d, false))(data)
+    let mut wad = context("WAD", |d| FlatWad::parse(d, WadType::Remaster))(data)
         .map_err(|e| invalid_data(convert_error(data, e)))?
         .1;
     let mut remove_ranges = Vec::with_capacity(3);
@@ -135,7 +137,7 @@ pub fn read_wad(data: &[u8], mut snd: Option<&mut SoundData>) -> std::io::Result
                 }
                 LumpType::Map => {
                     let d = std::mem::take(&mut entry.entry.data);
-                    let mut map = context("Map WAD", |d| FlatWad::parse(d, false))(&d)
+                    let mut map = context("Map WAD", |d| FlatWad::parse(d, WadType::Remaster))(&d)
                         .map_err(|e| invalid_data(convert_error(data, e)))?
                         .1;
                     let sectors = map

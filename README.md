@@ -36,6 +36,7 @@ d64make build WORK_DIR -o path/to/DOOM64.WAD
 | Doom 64 (U) (V1.1) [!].z64 | c28eaac9a8a8cc1d30c1b50fbb04622c2ddeb9b14ddcecc6edbaad4a6d067f3f |
 | Doom 64 (E) [!].z64        | e8460f2fa7e55172a296a1e30354cbb868be924a454ff883d1a6601c66b9610f |
 | Doom 64 (J) [!].z64        | 19ad4130f8b259f24761d5c873e2ce468315cc5f7bce07e7f44db21241cef4a9 |
+| DMEVAL12101996.z64         | 4b3931c14d548fedf98fcd28681ec45695dec415d39fd4a6d58a877e1c6dd2a2 |
 | DOOM64.WAD                 | 05ec0118cc130036d04bf6e6f7fe4792dfafc2d4bd98de349dd63e2022925365 |
 | DOOMSND.DLS                | 88814285dea4cf3b91fd73c0195c55512725600531689c5314a2559777e71b17 |
 

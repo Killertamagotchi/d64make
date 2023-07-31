@@ -1,4 +1,4 @@
-use crate::gfx;
+use crate::{extract::WadType, gfx};
 use arrayvec::ArrayVec;
 use indexmap::IndexMap;
 
@@ -130,7 +130,7 @@ impl Wad {
         let WadEntry { typ, data, .. } = entry;
         match typ {
             // important: must load and rewrite map wad to have proper 4-byte alignments
-            LumpType::Map => match FlatWad::parse(&data, true) {
+            LumpType::Map => match FlatWad::parse(&data, WadType::N64) {
                 Ok((_, wad)) => replace(&mut self.maps, name, WadEntry::new(typ, wad)),
                 Err(e) => log::warn!(
                     "Failed to load map {}:\n{}",
