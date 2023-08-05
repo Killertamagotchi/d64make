@@ -156,6 +156,16 @@ pub(crate) unsafe extern "C" fn bytevec_pop_front(buf: *mut Vec<u8>) -> u8 {
     (*buf).remove(0)
 }
 
+#[no_mangle]
+pub(crate) unsafe extern "C" fn rust_alloc(size: usize, align: usize) -> *mut () {
+    std::alloc::alloc(std::alloc::Layout::from_size_align(size, align).unwrap()) as *mut _
+}
+
+#[no_mangle]
+pub(crate) unsafe extern "C" fn rust_dealloc(ptr: *mut (), size: usize, align: usize) {
+    std::alloc::dealloc(ptr as *mut _, std::alloc::Layout::from_size_align(size, align).unwrap());
+}
+
 pub(crate) fn decode_vadpcm(data: &[u8], book: &AdpcmBook) -> Vec<i16> {
     let mut out = Vec::new();
     let mut buf = [0i32; 16];

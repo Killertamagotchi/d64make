@@ -9,8 +9,11 @@
 
 void *memset(void *, int, size_t);
 
-void *malloc(size_t);
-void free(void *);
+void *rust_alloc(size_t, size_t);
+void rust_dealloc(void *, size_t, size_t);
+
+#define alloc(typ, count) rust_alloc(sizeof(typ) * (count), _Alignof(typ))
+#define dealloc(ptr, count) rust_alloc(sizeof(*ptr) * (count), _Alignof(typeof(*ptr)))
 
 typedef struct bytevec_s bytevec_t;
 
@@ -477,7 +480,7 @@ ptrdiff_t DecodeD64(const uint8_t *input, size_t inputlen, uint8_t *output, size
     decoder.io.write = decoder.io.writePos = output;
     decoder.io.writeSize = outputlen;
 
-    allocPtr = malloc(tables.tableVar01[13]);
+    allocPtr = alloc(uint8_t, tables.tableVar01[13]);
 
     dec_byte = StartDecodeByte(&decoder, &tables);
     if (dec_byte == INT_MIN)
@@ -565,13 +568,13 @@ ptrdiff_t DecodeD64(const uint8_t *input, size_t inputlen, uint8_t *output, size
             goto fail;
     }
 
-    free(allocPtr);
+    dealloc(allocPtr, tables.tableVar01[13]);
 
       //PRINTF_D2(WHITE, 0, 21, "DecodeD64:End");
     return decoder.io.writePos - decoder.io.write;
 
 fail:
-    free(allocPtr);
+    dealloc(allocPtr, tables.tableVar01[13]);
     return -1;
 }
 
@@ -847,7 +850,7 @@ ptrdiff_t EncodeD64(const uint8_t *input, size_t inputlen, uint8_t *output, size
 
     InitDecodeTable(&tables);
 
-    allocPtr = malloc(tables.tableVar01[13]);
+    allocPtr = alloc(uint8_t, tables.tableVar01[13]);
 
     int lookup = 1;                                 // $s0
     short *tablePtr1 = tables.DecodeTable;                  // $s2
@@ -1215,7 +1218,7 @@ ptrdiff_t EncodeD64(const uint8_t *input, size_t inputlen, uint8_t *output, size
         }
     }
 
-    free(allocPtr);
+    dealloc(allocPtr, tables.tableVar01[13]);
     return io.writePos - io.write;
     /* TEST
     FILE *f3 = fopen ("Alloc2.bin","wb");
@@ -1226,7 +1229,7 @@ ptrdiff_t EncodeD64(const uint8_t *input, size_t inputlen, uint8_t *output, size
     fclose(f3);
     */
 fail:
-    free(allocPtr);
+    dealloc(allocPtr, tables.tableVar01[13]);
     return -1;
 }
 
@@ -1395,7 +1398,7 @@ ptrdiff_t EncodeJaguar(const uint8_t *input, size_t inputlen, uint8_t *output, s
     if (outputlen < (inputlen * 9)/8+1)
         return -1;
 
-    lzss_encoder_t *encoder = malloc(sizeof *encoder);
+    lzss_encoder_t *encoder = alloc(lzss_encoder_t, 1);
 
     memset(encoder, 0, sizeof *encoder);
 
@@ -1500,11 +1503,11 @@ ptrdiff_t EncodeJaguar(const uint8_t *input, size_t inputlen, uint8_t *output, s
        fprintf(stdout, "size = %d\n", *size);
        */
 
-    free(encoder);
+    dealloc(encoder, 1);
     return io.writePos - io.write;
 
 fail:
-    free(encoder);
+    dealloc(encoder, 1);
     return -1;
 }
 
