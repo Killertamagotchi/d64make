@@ -2,6 +2,8 @@
 
 Build custom WADs for embedding in a Doom 64 ROM.
 
+![Logo](../images/d64make.jpg)
+
 This program works by merging custom resources into the base game resources to
 create a new N64-compatible IWAD. Thus, an original copy of the game ROM is
 required to use it. All known commercial versions of the N64 ROM are supported.
