@@ -13,7 +13,7 @@ void *rust_alloc(size_t, size_t);
 void rust_dealloc(void *, size_t, size_t);
 
 #define alloc(typ, count) rust_alloc(sizeof(typ) * (count), _Alignof(typ))
-#define dealloc(ptr, count) rust_alloc(sizeof(*ptr) * (count), _Alignof(typeof(*ptr)))
+#define dealloc(typ, ptr, count) rust_alloc(sizeof(*ptr) * (count), _Alignof(typ))
 
 typedef struct bytevec_s bytevec_t;
 
@@ -568,13 +568,13 @@ ptrdiff_t DecodeD64(const uint8_t *input, size_t inputlen, uint8_t *output, size
             goto fail;
     }
 
-    dealloc(allocPtr, tables.tableVar01[13]);
+    dealloc(uint8_t, allocPtr, tables.tableVar01[13]);
 
       //PRINTF_D2(WHITE, 0, 21, "DecodeD64:End");
     return decoder.io.writePos - decoder.io.write;
 
 fail:
-    dealloc(allocPtr, tables.tableVar01[13]);
+    dealloc(uint8_t, allocPtr, tables.tableVar01[13]);
     return -1;
 }
 
@@ -1218,7 +1218,7 @@ ptrdiff_t EncodeD64(const uint8_t *input, size_t inputlen, uint8_t *output, size
         }
     }
 
-    dealloc(allocPtr, tables.tableVar01[13]);
+    dealloc(uint8_t, allocPtr, tables.tableVar01[13]);
     return io.writePos - io.write;
     /* TEST
     FILE *f3 = fopen ("Alloc2.bin","wb");
@@ -1229,7 +1229,7 @@ ptrdiff_t EncodeD64(const uint8_t *input, size_t inputlen, uint8_t *output, size
     fclose(f3);
     */
 fail:
-    dealloc(allocPtr, tables.tableVar01[13]);
+    dealloc(uint8_t, allocPtr, tables.tableVar01[13]);
     return -1;
 }
 
@@ -1503,11 +1503,11 @@ ptrdiff_t EncodeJaguar(const uint8_t *input, size_t inputlen, uint8_t *output, s
        fprintf(stdout, "size = %d\n", *size);
        */
 
-    dealloc(encoder, 1);
+    dealloc(lzss_encoder_t, encoder, 1);
     return io.writePos - io.write;
 
 fail:
-    dealloc(encoder, 1);
+    dealloc(lzss_encoder_t, encoder, 1);
     return -1;
 }
 
