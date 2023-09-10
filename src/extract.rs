@@ -794,7 +794,12 @@ impl Args {
         let filename = if let Some(outfile) = &outfile {
             Cow::Borrowed(outfile)
         } else {
-            let filename = mk_filename();
+            #[allow(unused_mut)]
+            let mut filename = mk_filename();
+            #[cfg(windows)]
+            {
+                filename = Cow::Owned(filename.replace('\\', "^").replace('?', "@"));
+            }
             if !include.is_empty() && !include.iter().any(|g| glob_match::glob_match(g, &filename))
             {
                 return Ok(None);

@@ -99,6 +99,10 @@ Adding new resources has some limitations.
   or the RSP will overflow and crash the game (a tile is each scanline-rounded
   2kb portion of the image to fit in TMEM, thus the number of tiles in an image
   is roughly `ceil(height / floor(2048 / width))` )
+- Some WAD entry names can contain characters that are disallowed in Windows
+  file paths. For now, when extracting entries on Windows, `?` will be replaced
+  with `@` and `\` will be replaced with `^`. The reverse replacement will
+  always be applied when building a WAD.
 - Adding more sounds and music increases the size of the audio tables and thus
   requires increasing the audio heap size to prevent heap overflow. Effects and
   music are both triggered in the game by a sequence number. These numbers must

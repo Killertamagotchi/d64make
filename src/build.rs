@@ -163,6 +163,7 @@ fn load_entry(
         }
         _ => {
             let mut upper = name_str.replace('^', "\\");
+            upper = upper.replace('@', "?");
             upper.make_ascii_uppercase();
             let name = EntryName::new(&upper).unwrap();
             let entry = WadEntry::new(typ, data);
