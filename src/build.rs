@@ -321,8 +321,7 @@ impl FlatWad {
         let mut offset = 0xcu32;
         for entry in &self.entries {
             let size = entry.entry.uncompressed_len() as u32;
-            let o = if size > 0 { offset } else { 0 };
-            out.write_all(&o.to_le_bytes())?;
+            out.write_all(&offset.to_le_bytes())?;
             out.write_all(&size.to_le_bytes())?;
             let mut name = entry.name.0.clone();
             while name.len() < name.capacity() {
