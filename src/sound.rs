@@ -119,7 +119,14 @@ impl Default for SampleData {
 
 impl SampleData {
     #[inline]
-    pub fn raw_data_len(&self) -> usize {
+    pub fn stored_len(&self) -> usize {
+        match self {
+            Self::Raw(s) => s.len() * 2,
+            Self::Adpcm { data, .. } => data.len(),
+        }
+    }
+    #[inline]
+    pub fn n_samples(&self) -> usize {
         match self {
             Self::Raw(s) => s.len(),
             Self::Adpcm {
@@ -142,6 +149,31 @@ pub struct PatchInfo {
     pub samples: SampleData,
     pub pitch: i32,
     pub r#loop: Option<Loop>,
+}
+
+impl PatchInfo {
+    pub fn compress(&self) -> std::io::Result<Cow<'_, Self>> {
+        match &self.samples {
+            SampleData::Raw(raw) => {
+                let (data, book, loopstate) = crate::compression::encode_vadpcm(
+                    raw,
+                    crate::compression::AdpcmParams::default(),
+                    self.r#loop.as_ref(),
+                )?;
+                Ok(Cow::Owned(Self {
+                    samples: SampleData::Adpcm {
+                        data,
+                        uncompressed_len: raw.len(),
+                        book: Box::new(book),
+                        loopstate: loopstate.map(Box::new),
+                    },
+                    pitch: self.pitch,
+                    r#loop: self.r#loop.clone(),
+                }))
+            }
+            SampleData::Adpcm { .. } => Ok(Cow::Borrowed(self)),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, BinRead, BinWrite)]
@@ -417,6 +449,7 @@ fn align8_slice(data: &[u8], init_size: usize) -> &[u8] {
 fn extract_instruments<'a, E: ParseError<&'a [u8]>>(
     wmd: &'a [u8],
     wdd: &[u8],
+    decompress: bool,
 ) -> nom::IResult<&'a [u8], BTreeMap<u16, Instrument>, E> {
     let start = wmd.len();
 
@@ -573,26 +606,36 @@ fn extract_instruments<'a, E: ParseError<&'a [u8]>>(
             for s in samp.chunks_exact(2) {
                 out.push(i16::from_be_bytes(<[u8; 2]>::try_from(s).unwrap()));
             }
-            (out, r#loop)
+            (SampleData::Raw(out), r#loop)
         } else {
             let r#loop = if let Some(r#loop) = r#loop {
                 Some(
                     adpcm_loops
                         .get(r#loop as usize)
-                        .map(|l| l.to_loop())
                         .ok_or_else(|| too_large(&[]))?,
                 )
             } else {
                 None
             };
             let book = books.get(index).ok_or_else(|| too_large(&[]))?;
-            let out = crate::compression::decode_vadpcm(&samp, book);
-            (out, r#loop)
+            let out = match decompress {
+                true => SampleData::Raw(crate::compression::decode_vadpcm(&samp, book)),
+                false => {
+                    let uncompressed_len = samp.chunks_exact(9).len() * 16;
+                    SampleData::Adpcm {
+                        data: samp,
+                        uncompressed_len,
+                        book: Box::new(book.clone()),
+                        loopstate: r#loop.map(|l| Box::new(l.state.clone())),
+                    }
+                }
+            };
+            (out, r#loop.map(|l| l.to_loop()))
         };
         samples.insert(
             index as u16,
             Rc::new(RefCell::new(PatchInfo {
-                samples: SampleData::Raw(samp),
+                samples: samp,
                 pitch,
                 r#loop,
             })),
@@ -621,8 +664,13 @@ fn extract_instruments<'a, E: ParseError<&'a [u8]>>(
     Ok((wmd, instruments))
 }
 
-pub fn extract_sound(wmd: &[u8], wsd: &[u8], wdd: &[u8]) -> std::io::Result<SoundData> {
-    let mut instruments = context("WMD", |wmd| extract_instruments(wmd, wdd))(wmd)
+pub fn extract_sound(
+    wmd: &[u8],
+    wsd: &[u8],
+    wdd: &[u8],
+    decompress: bool,
+) -> std::io::Result<SoundData> {
+    let mut instruments = context("WMD", |wmd| extract_instruments(wmd, wdd, decompress))(wmd)
         .map_err(|e| invalid_data(convert_error(wmd, e)))?
         .1;
 
@@ -672,26 +720,10 @@ pub fn extract_sound(wmd: &[u8], wsd: &[u8], wdd: &[u8]) -> std::io::Result<Soun
 impl SoundData {
     pub fn compress(&mut self) {
         self.foreach_sample_mut(|index, info| {
-            if let SampleData::Raw(raw) = &info.samples {
-                let res = crate::compression::encode_vadpcm(
-                    raw,
-                    crate::compression::AdpcmParams::default(),
-                    info.r#loop.as_ref(),
-                );
-                match res {
-                    Ok((data, book, loopstate)) => {
-                        let uncompressed_len = raw.len();
-                        info.samples = SampleData::Adpcm {
-                            data,
-                            uncompressed_len,
-                            book: Box::new(book),
-                            loopstate: loopstate.map(Box::new),
-                        };
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to encode sample {index}: {e}");
-                    }
-                }
+            match info.compress() {
+                Ok(Cow::Owned(compressed)) => *info = compressed,
+                Ok(Cow::Borrowed(_)) => {}
+                Err(e) => log::warn!("Failed to encode sample {index}: {e}"),
             }
             Ok(())
         })
@@ -948,7 +980,7 @@ impl SoundData {
                     let out_seq = match sample.info.r#loop {
                         Some(_) => &mut loop_seq,
                         None => {
-                            let delta = (sample.info.samples.raw_data_len() as f64 * 240.0
+                            let delta = (sample.info.samples.n_samples() as f64 * 240.0
                                 / 22050.0
                                 / 2.0f64.powf(sample.info.pitch as f64 / 1200.0))
                             .ceil() as u32;

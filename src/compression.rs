@@ -163,7 +163,10 @@ pub(crate) unsafe extern "C" fn rust_alloc(size: usize, align: usize) -> *mut ()
 
 #[no_mangle]
 pub(crate) unsafe extern "C" fn rust_dealloc(ptr: *mut (), size: usize, align: usize) {
-    std::alloc::dealloc(ptr as *mut _, std::alloc::Layout::from_size_align(size, align).unwrap());
+    std::alloc::dealloc(
+        ptr as *mut _,
+        std::alloc::Layout::from_size_align(size, align).unwrap(),
+    );
 }
 
 pub(crate) fn decode_vadpcm(data: &[u8], book: &AdpcmBook) -> Vec<i16> {

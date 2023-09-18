@@ -470,7 +470,7 @@ impl SoundData {
         let mut sample_count = 0u32;
         let mut smpl_size = 0u32;
         self.foreach_instrument_sample(|sample| {
-            smpl_size += (sample.samples.raw_data_len() + 46) as u32 * 2;
+            smpl_size += (sample.samples.n_samples() + 46) as u32 * 2;
             sample_count += 1;
             Ok(())
         })?;
@@ -692,7 +692,7 @@ impl SoundData {
         let mut sample_pos = 0u32;
         self.foreach_instrument_sample(|sample| {
             let samplerate = crate::sound::cents_to_samplerate(sample.pitch);
-            let end = sample_pos + sample.samples.raw_data_len() as u32;
+            let end = sample_pos + sample.samples.n_samples() as u32;
             write!(w, "{:\0<20}", format!("SFX_{:05}", sample_id))?;
             w.write_all(&sample_pos.to_le_bytes())?;
             w.write_all(&end.to_le_bytes())?;

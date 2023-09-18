@@ -1,7 +1,7 @@
 use std::{borrow::Cow, path::PathBuf};
 
 use crate::{
-    extract::{self, PaletteCache},
+    extract::{self, PaletteCache, ReadFlags},
     gfx, EntryName, FlatEntry, LumpType, WadEntry,
 };
 
@@ -101,11 +101,11 @@ pub fn inspect(args: Args) -> std::io::Result<()> {
     } = args;
     let verbose = crate::is_log_level(log::LevelFilter::Debug);
     let ext = crate::extract::ExtFiles { wdd, wmd, wsd, dls };
-    let (wad, snd) = extract::read_rom_or_iwad(&input, extract::ReadFlags::all(), &ext)?;
+    let (wad, snd) = extract::read_rom_or_iwad(&input, ReadFlags::IWAD | ReadFlags::SOUND, &ext)?;
     let wad = wad.unwrap();
     log::info!("WAD Entries: {}", wad.entries.len());
     if !wad.entries.is_empty() {
-        log::info!("  SIZE       NAME     TEST HASH");
+        log::info!("  SIZE       REALSIZE   NAME     TEST HASH");
         let mut palettes = PaletteCache::default();
         for (index, FlatEntry { name, entry }) in wad.entries.iter().enumerate() {
             if !include.is_empty() {
@@ -121,6 +121,7 @@ pub fn inspect(args: Args) -> std::io::Result<()> {
                 true
             };
 
+            let realsize = entry.uncompressed_len();
             let size = entry.data.len();
             let name = name.display();
             let stat = if test {
@@ -133,7 +134,7 @@ pub fn inspect(args: Args) -> std::io::Result<()> {
                 "-   "
             };
             let hash = crate::hash(&entry.data);
-            log::info!("  0x{size: <8x} {name: <8} {stat} 0x{hash:016x}");
+            log::info!("  0x{size: <8x} 0x{realsize: <8x} {name: <8} {stat} 0x{hash:016x}");
         }
     }
     if let Some(snd) = snd {
@@ -165,7 +166,7 @@ pub fn inspect(args: Args) -> std::io::Result<()> {
                         patchmap.release_time,
                         patchmap.attack_level,
                         patchmap.decay_level,
-                        sample.samples.raw_data_len(),
+                        sample.samples.n_samples(),
                         sample.pitch,
                         display_loop(sample.r#loop.as_ref()),
                     );
@@ -184,13 +185,14 @@ pub fn inspect(args: Args) -> std::io::Result<()> {
         }
         log::info!("Effect Sequences: {}", effect_count);
         if effect_count > 0 {
-            log::info!("  SEQ   PRI LENGTH     PITCH       LOOP  START      END");
+            log::info!("  SEQ   PRI SAMPLES    SIZE       PITCH       LOOP  START      END");
             for (index, seq) in &snd.sequences {
                 if let crate::sound::Sequence::Effect(sample) = seq {
                     log::info!(
-                        "  {index: <5} {: <3} {: <10} {: <11}{}",
+                        "  {index: <5} {: <3} {: <10} 0x{: <8x} {: <11}{}",
                         sample.priority,
-                        sample.info.samples.raw_data_len(),
+                        sample.info.samples.n_samples(),
+                        sample.info.samples.stored_len(),
                         sample.info.pitch,
                         display_loop(sample.info.r#loop.as_ref()),
                     );

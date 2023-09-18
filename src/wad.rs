@@ -1,6 +1,8 @@
-use crate::{extract::WadType, gfx};
+use crate::{extract::WadType, gfx, invalid_data};
 use arrayvec::ArrayVec;
 use indexmap::IndexMap;
+use nom::error::{context, VerboseError};
+use std::borrow::Cow;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EntryName(pub ArrayVec<u8, 8>);
@@ -50,6 +52,13 @@ pub enum Compression {
     None,
     Lzss(usize),
     Huffman(usize),
+}
+
+impl Compression {
+    #[inline]
+    pub fn is_compressed(&self) -> bool {
+        !matches!(self, Compression::None)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -130,7 +139,7 @@ impl Wad {
         let WadEntry { typ, data, .. } = entry;
         match typ {
             // important: must load and rewrite map wad to have proper 4-byte alignments
-            LumpType::Map => match FlatWad::parse(&data, WadType::N64) {
+            LumpType::Map => match FlatWad::parse(&data, WadType::N64, false) {
                 Ok((_, wad)) => replace(&mut self.maps, name, WadEntry::new(typ, wad)),
                 Err(e) => log::warn!(
                     "Failed to load map {}:\n{}",
@@ -270,6 +279,64 @@ impl WadEntry<Vec<u8>> {
     pub fn padded_len(&self) -> Option<u32> {
         let len = u32::try_from(self.data.len()).ok()?;
         Some(len.checked_add(3)? & !3)
+    }
+    pub fn decompress(&self) -> std::io::Result<Cow<'_, Self>> {
+        let data = match self.compression {
+            Compression::None => return Ok(Cow::Borrowed(self)),
+            Compression::Lzss(size) => {
+                context("Jag Decompression", |d| {
+                    crate::compression::decode_jaguar::<VerboseError<_>>(d, size)
+                })(&self.data)
+                .map_err(|e| invalid_data(e))?
+                .1
+            }
+            Compression::Huffman(size) => {
+                context("D64 Decompression", |d| {
+                    crate::compression::decode_d64::<VerboseError<_>>(d, size)
+                })(&self.data)
+                .map_err(|e| invalid_data(e))?
+                .1
+            }
+        };
+        Ok(Cow::Owned(Self {
+            typ: self.typ,
+            compression: Compression::None,
+            data,
+        }))
+    }
+    pub fn compress(&self) -> std::io::Result<Cow<'_, Self>> {
+        if self.compression.is_compressed() {
+            return Ok(Cow::Borrowed(self));
+        }
+        match self.typ.compression() {
+            Compression::Lzss(_) => {
+                let data = crate::compression::encode_jaguar(&self.data)?;
+                let origsize = self.data.len();
+                if data.len() < origsize {
+                    return Ok(Cow::Owned(Self {
+                        typ: self.typ,
+                        compression: Compression::Lzss(origsize),
+                        data,
+                    }));
+                }
+            }
+            Compression::Huffman(_) => {
+                /*
+                // broken for now, very slow and crashes so just disable it
+                let data = crate::compression::encode_d64(&self.data)?;
+                let origsize = entry.entry.data.len();
+                if data.len() < origsize {
+                    return Ok(Cow::Owned(Self {
+                        typ: self.typ,
+                        compression: Compression::Huffman(origsize),
+                        data,
+                    }));
+                }
+                */
+            }
+            _ => {}
+        }
+        Ok(Cow::Borrowed(self))
     }
 }
 

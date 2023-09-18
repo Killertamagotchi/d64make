@@ -1,12 +1,13 @@
 use crate::{
     convert_error,
-    extract::read_rom_or_iwad,
+    extract::{read_rom_or_iwad, ReadFlags},
     gfx, invalid_data,
     sound::SoundData,
     wad::{EntryMap, FlatEntry},
-    Compression, EntryName, FlatWad, LumpType, Wad, WadEntry,
+    EntryName, FlatWad, LumpType, Wad, WadEntry,
 };
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     io,
     path::{Path, PathBuf},
@@ -253,35 +254,8 @@ fn is_map_wad(path: &impl AsRef<Path>) -> bool {
 impl FlatWad {
     pub fn compress(&mut self) {
         for entry in &mut self.entries {
-            if entry.entry.compression != Compression::None {
-                continue;
-            }
-            let compression = entry.entry.typ.compression();
-            match compression {
-                Compression::Lzss(_) => {
-                    if let Ok(data) = crate::compression::encode_jaguar(&entry.entry.data) {
-                        let origsize = entry.entry.data.len();
-                        if data.len() < origsize {
-                            entry.entry.data = data;
-                            entry.entry.compression = Compression::Lzss(origsize);
-                        }
-                    }
-                }
-                Compression::Huffman(_) => {
-                    continue;
-                    /*
-                    // broken for now, very slow and crashes so just disable it
-                    if let Ok(data) = crate::compression::encode_d64(&entry.entry.data) {
-                        println!("compressing huff {} -> {}", entry.entry.data.len(), data.len());
-                        let origsize = entry.entry.data.len();
-                        if data.len() < origsize {
-                            entry.entry.data = data;
-                            entry.entry.compression = Compression::Huffman(origsize);
-                        }
-                    }
-                    */
-                }
-                Compression::None => continue,
+            if let Ok(Cow::Owned(compressed)) = entry.entry.compress() {
+                entry.entry = compressed;
             }
         }
     }
@@ -328,7 +302,7 @@ impl FlatWad {
                 name.push(0);
             }
             let mut name = name.into_inner().unwrap();
-            if entry.entry.compression != Compression::None {
+            if entry.entry.compression.is_compressed() {
                 name[0] |= 0x80;
             }
             out.write_all(&name)?;
@@ -523,9 +497,9 @@ pub fn build(args: Args) -> io::Result<()> {
             .map(|p| p.to_ascii_lowercase());
         let ext = ext.as_deref();
         if ext == Some("z64") || (ext == Some("wad") && !is_map_wad(&input)) {
-            let mut flags = crate::extract::ReadFlags::IWAD;
+            let mut flags = ReadFlags::IWAD | ReadFlags::DECOMPRESS;
             if !no_sound {
-                flags |= crate::extract::ReadFlags::SOUND;
+                flags |= ReadFlags::SOUND;
             }
             let (flat, isnd) =
                 read_rom_or_iwad(input, flags, &crate::extract::ExtFiles::default())?;

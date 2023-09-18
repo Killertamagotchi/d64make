@@ -33,6 +33,9 @@ pub struct Args {
     /// Keep lumps in raw N64 format
     #[arg(long, default_value_t = false)]
     raw: bool,
+    /// Do not decompress WAD data
+    #[arg(long, default_value_t = false)]
+    no_decompress: bool,
     /// Optional WDD file to read when extracting IWAD [default: DOOM64.WDD]
     #[arg(long)]
     wdd: Option<PathBuf>,
@@ -154,11 +157,11 @@ pub enum WadType {
 
 impl WadType {
     #[inline]
-    fn is_remaster(&self) -> bool {
+    pub fn is_remaster(&self) -> bool {
         matches!(self, Self::Remaster)
     }
     #[inline]
-    fn is_prototype(&self) -> bool {
+    pub fn is_prototype(&self) -> bool {
         matches!(self, Self::N64Prototype)
     }
 }
@@ -183,7 +186,11 @@ fn is_map_lump(name: &[u8]) -> bool {
 }
 
 impl FlatWad {
-    pub fn parse(wad: &[u8], wad_type: WadType) -> nom::IResult<&[u8], Self, VerboseError<&[u8]>> {
+    pub fn parse(
+        wad: &[u8],
+        wad_type: WadType,
+        decompress: bool,
+    ) -> nom::IResult<&[u8], Self, VerboseError<&[u8]>> {
         use nom::branch::alt;
         use nom::bytes::complete::{tag, take};
         use nom::number::complete::le_u32;
@@ -198,13 +205,18 @@ impl FlatWad {
         .1;
         let mut table = &wad[offset..];
         let mut cur_map = None::<(ArrayVec<u8, 8>, Self)>;
-        let mut entries = Vec::new();
+        let mut entries = Vec::with_capacity(count as usize);
         let mut base_typ = Unknown;
         let mut blanktex_count = 0;
+        let mut parsed_table = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let (t, offset) = le_u32(table)?;
             let (t, size) = le_u32(t)?;
             let (t, name) = take(8usize)(t)?;
+            table = t;
+            parsed_table.push((offset, size, name));
+        }
+        for (i, (offset, size, name)) in parsed_table.iter().copied().enumerate() {
             let name = name.split(|b| *b == b'\0').next().unwrap();
             let mut name = ArrayVec::try_from(name).unwrap();
             let mut compressed = false;
@@ -290,28 +302,36 @@ impl FlatWad {
                     }
                 }
             }
-            let compression = match (typ, compressed) {
-                (Map | Demo | Texture | Flat, true) => Compression::Huffman(0),
-                (_, true) => Compression::Lzss(0),
+            let mut compression = match (typ, compressed) {
+                (Map | Demo | Texture | Flat, true) => Compression::Huffman(size as usize),
+                (_, true) => Compression::Lzss(size as usize),
                 (_, false) => Compression::None,
             };
             let data = if size > 0 {
                 let start = offset as usize;
-                match (compression, wad_type.is_prototype()) {
-                    (Compression::None, _) => {
-                        let end = start + size as usize;
-                        wad[start..end].to_owned()
+                let compressed_size = parsed_table
+                    .get(i + 1)
+                    .map(|e| e.0 as usize - offset as usize)
+                    .unwrap_or_else(|| table.len() - offset as usize);
+                match (compression, wad_type.is_prototype(), decompress) {
+                    (Compression::None, _, _) => wad[start..start + size as usize].to_owned(),
+                    (_, _, false) => wad[start..start + compressed_size].to_owned(),
+                    (Compression::Huffman(_), true, true) => {
+                        compression = Compression::Lzss(size as usize);
+                        wad[start..start + compressed_size].to_owned()
                     }
-                    (Compression::Lzss(_), _) | (Compression::Huffman(_), true) => {
+                    (Compression::Lzss(_), _, true) => {
+                        compression = Compression::None;
                         context("Jag Decompression", |d| {
                             crate::compression::decode_jaguar(d, size as usize)
-                        })(&wad[start..])?
+                        })(&wad[start..start + compressed_size])?
                         .1
                     }
-                    (Compression::Huffman(_), false) => {
+                    (Compression::Huffman(_), false, true) => {
+                        compression = Compression::None;
                         context("D64 Decompression", |d| {
                             crate::compression::decode_d64(d, size as usize)
-                        })(&wad[start..])?
+                        })(&wad[start..start + compressed_size])?
                         .1
                     }
                 }
@@ -322,7 +342,7 @@ impl FlatWad {
                 name: crate::EntryName(name),
                 entry: WadEntry {
                     typ,
-                    compression: Compression::None,
+                    compression,
                     data,
                 },
             };
@@ -331,7 +351,6 @@ impl FlatWad {
             } else {
                 entries.push(entry);
             }
-            table = t;
         }
         Ok((table, Self { entries }))
     }
@@ -346,6 +365,7 @@ impl FlatWad {
         if raw {
             return Ok(Cow::Borrowed(entry.data.as_slice()));
         }
+        let entry = entry.decompress()?;
         Ok(match entry.typ {
             Palette => {
                 let data = entry.data.get(8..).ok_or_else(|| {
@@ -461,7 +481,10 @@ impl FlatWad {
                     .map_err(invalid_data)
                     .map(Cow::Owned)?
             }
-            _ => Cow::Borrowed(entry.data.as_slice()),
+            _ => match entry {
+                Cow::Borrowed(entry) => Cow::Borrowed(entry.data.as_slice()),
+                Cow::Owned(entry) => Cow::Owned(entry.data),
+            },
         })
     }
 }
@@ -476,6 +499,7 @@ bitflags::bitflags! {
     pub struct ReadFlags: u32 {
         const IWAD = 0b00000001;
         const SOUND = 0b00000010;
+        const DECOMPRESS = 0b00000100;
     }
 }
 
@@ -493,6 +517,7 @@ pub fn read_rom_or_iwad(
     ext: &ExtFiles,
 ) -> io::Result<(Option<FlatWad>, Option<SoundData>)> {
     let path = path.as_ref();
+    let decompress = flags.contains(ReadFlags::DECOMPRESS);
     log::info!("Reading `{}`", path.display());
     let mut file = std::fs::File::open(path)?;
     let mut header = [0u8; 64];
@@ -530,7 +555,7 @@ pub fn read_rom_or_iwad(
             let wmd = read_sound_data(&ext.wmd, path, "WMD")?;
             let wsd = read_sound_data(&ext.wsd, path, "WSD")?;
             let wdd = read_sound_data(&ext.wdd, path, "WDD")?;
-            snd = Some(crate::sound::extract_sound(&wmd, &wsd, &wdd)?);
+            snd = Some(crate::sound::extract_sound(&wmd, &wsd, &wdd, decompress)?);
         }
     } else {
         let end = file.seek(io::SeekFrom::End(0))?;
@@ -575,7 +600,7 @@ pub fn read_rom_or_iwad(
             let wmd = read_rom_data(&rom, data.wmd_offset, data.wmd_size);
             let wsd = read_rom_data(&rom, data.wsd_offset, data.wsd_size);
             let wdd = read_rom_data(&rom, data.wdd_offset, data.wdd_size);
-            snd = Some(crate::sound::extract_sound(wmd, wsd, wdd)?);
+            snd = Some(crate::sound::extract_sound(wmd, wsd, wdd, decompress)?);
         }
         log::info!(
             "Loaded ROM `{}`: {region:?} v1.{revision}",
@@ -626,13 +651,17 @@ pub fn read_rom_or_iwad(
             }
             Some(wad)
         } else {
-            Some(FlatWad::parse(&wad, wad_type).map(|w| w.1).map_err(|e| {
-                invalid_data(format!(
-                    "Failed reading {}:\n{}",
-                    path.display(),
-                    convert_error(wad.as_slice(), e)
-                ))
-            })?)
+            Some(
+                FlatWad::parse(&wad, wad_type, decompress)
+                    .map(|w| w.1)
+                    .map_err(|e| {
+                        invalid_data(format!(
+                            "Failed reading {}:\n{}",
+                            path.display(),
+                            convert_error(wad.as_slice(), e)
+                        ))
+                    })?,
+            )
         }
     } else {
         None
@@ -658,7 +687,11 @@ pub fn extract(mut args: Args) -> io::Result<()> {
         wsd: args.wsd.clone(),
         dls: args.dls.clone(),
     };
-    let (wad, snd) = read_rom_or_iwad(&args.input, ReadFlags::all(), &ext)?;
+    let mut flags = ReadFlags::IWAD | ReadFlags::SOUND;
+    if !args.no_decompress {
+        flags |= ReadFlags::DECOMPRESS;
+    }
+    let (wad, snd) = read_rom_or_iwad(&args.input, flags, &ext)?;
     let wad = wad.unwrap();
 
     let mut palettes = PaletteCache::default();
@@ -697,7 +730,7 @@ pub fn extract(mut args: Args) -> io::Result<()> {
             || subdir_for(entry.typ),
             || name.display(),
             || ext_for(entry.typ),
-            None,
+            entry.compression.is_compressed().then(|| "LMPZ"),
         )? {
             let data = wad.extract_one(index, &mut palettes, args.raw)?;
             file.write_all(&data).unwrap();
@@ -728,7 +761,7 @@ pub fn extract(mut args: Args) -> io::Result<()> {
                         || Some("MUSIC"),
                         || Cow::Owned(format!("MUS_{index:03}")),
                         || "MID",
-                        None,
+                        Some("SEQ"),
                     )? {
                         if args.raw {
                             seq.write_raw(&mut file).unwrap();
@@ -742,7 +775,10 @@ pub fn extract(mut args: Args) -> io::Result<()> {
                         || Some("SOUNDS"),
                         || Cow::Owned(format!("SFX_{index:03}")),
                         || "WAV",
-                        None,
+                        Some(match &sample.info.samples {
+                            SampleData::Raw(_) => "LMP",
+                            SampleData::Adpcm { .. } => "VAD",
+                        }),
                     )? {
                         if args.raw {
                             match &sample.info.samples {
