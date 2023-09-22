@@ -1,4 +1,4 @@
-use crate::{extract::WadType, gfx, invalid_data};
+use crate::{convert_error, extract::WadType, gfx, invalid_data};
 use arrayvec::ArrayVec;
 use indexmap::IndexMap;
 use nom::error::{context, VerboseError};
@@ -58,6 +58,14 @@ impl Compression {
     #[inline]
     pub fn is_compressed(&self) -> bool {
         !matches!(self, Compression::None)
+    }
+    #[inline]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Lzss(_) => "Jaguar",
+            Self::Huffman(_) => "D64",
+        }
     }
 }
 
@@ -139,14 +147,16 @@ impl Wad {
         let WadEntry { typ, data, .. } = entry;
         match typ {
             // important: must load and rewrite map wad to have proper 4-byte alignments
-            LumpType::Map => match FlatWad::parse(&data, WadType::N64, false) {
-                Ok((_, wad)) => replace(&mut self.maps, name, WadEntry::new(typ, wad)),
-                Err(e) => log::warn!(
-                    "Failed to load map {}:\n{}",
-                    name.display(),
-                    crate::convert_error(data.as_slice(), e)
-                ),
-            },
+            LumpType::Map => {
+                match FlatWad::parse(&data, WadType::N64, false, &Default::default()) {
+                    Ok((_, wad)) => replace(&mut self.maps, name, WadEntry::new(typ, wad)),
+                    Err(e) => log::warn!(
+                        "Failed to load map {}:\n{}",
+                        name.display(),
+                        crate::convert_error(data.as_slice(), e)
+                    ),
+                }
+            }
             LumpType::Palette => {
                 if let Some(data) = data.get(8..8 + 256 * 2) {
                     let mut palette = [gfx::RGBA::default(); 256];
@@ -281,23 +291,18 @@ impl WadEntry<Vec<u8>> {
         Some(len.checked_add(3)? & !3)
     }
     pub fn decompress(&self) -> std::io::Result<Cow<'_, Self>> {
-        let data = match self.compression {
+        let res = match self.compression {
             Compression::None => return Ok(Cow::Borrowed(self)),
-            Compression::Lzss(size) => {
-                context("Jag Decompression", |d| {
-                    crate::compression::decode_jaguar::<VerboseError<_>>(d, size)
-                })(&self.data)
-                .map_err(|e| invalid_data(e))?
-                .1
-            }
-            Compression::Huffman(size) => {
-                context("D64 Decompression", |d| {
-                    crate::compression::decode_d64::<VerboseError<_>>(d, size)
-                })(&self.data)
-                .map_err(|e| invalid_data(e))?
-                .1
-            }
+            Compression::Lzss(size) => context("Jag Decompression", |d| {
+                crate::compression::decode_jaguar::<VerboseError<_>>(d, size)
+            })(&self.data),
+            Compression::Huffman(size) => context("D64 Decompression", |d| {
+                crate::compression::decode_d64::<VerboseError<_>>(d, size)
+            })(&self.data),
         };
+        let data = res
+            .map_err(|e| invalid_data(convert_error(self.data.as_slice(), e)))?
+            .1;
         Ok(Cow::Owned(Self {
             typ: self.typ,
             compression: Compression::None,

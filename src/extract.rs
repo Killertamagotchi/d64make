@@ -186,24 +186,25 @@ fn is_map_lump(name: &[u8]) -> bool {
 }
 
 impl FlatWad {
-    pub fn parse(
-        wad: &[u8],
+    pub fn parse<'a>(
+        wad: &'a [u8],
         wad_type: WadType,
         decompress: bool,
-    ) -> nom::IResult<&[u8], Self, VerboseError<&[u8]>> {
+        filters: &crate::FileFilters,
+    ) -> nom::IResult<&'a [u8], Self, VerboseError<&'a [u8]>> {
         use nom::branch::alt;
         use nom::bytes::complete::{tag, take};
         use nom::number::complete::le_u32;
         use LumpType::*;
 
-        let (count, offset) = context("WAD Header", |data| {
+        let (count, table_offset) = context("WAD Header", |data| {
             let (data, _) = alt((tag("PWAD"), tag("IWAD")))(data)?;
             let (data, count) = le_u32(data)?;
             let (data, offset) = le_u32(data)?;
             Ok((data, (count, offset as usize)))
         })(wad)?
         .1;
-        let mut table = &wad[offset..];
+        let mut table = &wad[table_offset..];
         let mut cur_map = None::<(ArrayVec<u8, 8>, Self)>;
         let mut entries = Vec::with_capacity(count as usize);
         let mut base_typ = Unknown;
@@ -226,8 +227,8 @@ impl FlatWad {
                     name[0] = first & !0x80;
                 }
             }
-            let mut typ = base_typ;
             let n = name.as_slice();
+            let mut typ = base_typ;
             if n == b"?" {
                 blanktex_count += 1;
                 if base_typ == Texture && blanktex_count == 2 {
@@ -302,17 +303,29 @@ impl FlatWad {
                     }
                 }
             }
+            let decompress = if filters.is_empty() {
+                decompress
+            } else {
+                filters.matches(&String::from_utf8_lossy(n))
+            };
             let mut compression = match (typ, compressed) {
                 (Map | Demo | Texture | Flat, true) => Compression::Huffman(size as usize),
                 (_, true) => Compression::Lzss(size as usize),
                 (_, false) => Compression::None,
             };
+            if decompress || filters.is_empty() {
+                log::debug!(
+                    "Loading {} as {typ:?} with compression {}",
+                    String::from_utf8_lossy(&name),
+                    compression.name()
+                );
+            }
             let data = if size > 0 {
                 let start = offset as usize;
                 let compressed_size = parsed_table
                     .get(i + 1)
                     .map(|e| e.0 as usize - offset as usize)
-                    .unwrap_or_else(|| table.len() - offset as usize);
+                    .unwrap_or_else(|| table_offset - offset as usize);
                 match (compression, wad_type.is_prototype(), decompress) {
                     (Compression::None, _, _) => wad[start..start + size as usize].to_owned(),
                     (_, _, false) => wad[start..start + compressed_size].to_owned(),
@@ -365,7 +378,13 @@ impl FlatWad {
         if raw {
             return Ok(Cow::Borrowed(entry.data.as_slice()));
         }
-        let entry = entry.decompress()?;
+        let entry = entry.decompress().map_err(|e| {
+            invalid_data(format!(
+                "Failed to decompress entry `{}`:\n{}",
+                name.display(),
+                e,
+            ))
+        })?;
         Ok(match entry.typ {
             Palette => {
                 let data = entry.data.get(8..).ok_or_else(|| {
@@ -380,7 +399,7 @@ impl FlatWad {
                 context("Graphic", |d| gfx::Graphic::parse(d, entry.typ))(&entry.data)
                     .map_err(|e| {
                         invalid_data(format!(
-                            "Failed to parse entry {}:\n{}",
+                            "Failed to parse graphic `{}`:\n{}",
                             name.display(),
                             convert_error(entry.data.as_slice(), e),
                         ))
@@ -391,7 +410,7 @@ impl FlatWad {
             Texture | Flat => context("Texture", gfx::Texture::parse)(&entry.data)
                 .map_err(|e| {
                     invalid_data(format!(
-                        "Failed to parse entry {}:\n{}",
+                        "Failed to parse texture `{}`:\n{}",
                         name.display(),
                         convert_error(entry.data.as_slice(), e),
                     ))
@@ -401,7 +420,7 @@ impl FlatWad {
             HudGraphic | Sky => context("HudGraphic/Sky", gfx::Sprite::parse)(&entry.data)
                 .map_err(|e| {
                     invalid_data(format!(
-                        "Failed to parse entry {}:\n{}",
+                        "Failed to parse HUD graphic `{}`:\n{}",
                         name.display(),
                         convert_error(entry.data.as_slice(), e),
                     ))
@@ -412,7 +431,7 @@ impl FlatWad {
                 let sprite = context("Sprite", gfx::Sprite::parse)(&entry.data)
                     .map_err(|e| {
                         invalid_data(format!(
-                            "Failed to parse entry {}:\n{}",
+                            "Failed to parse sprite `{}`:\n{}",
                             name.display(),
                             convert_error(entry.data.as_slice(), e),
                         ))
@@ -434,7 +453,8 @@ impl FlatWad {
                                 .ok_or_else(|| invalid_data("palette offset out of range"))?;
                             match palentry.entry.typ {
                                 Palette => {
-                                    let data = palentry.entry.data.get(8..).ok_or_else(|| {
+                                    let entry = palentry.entry.decompress()?;
+                                    let data = entry.data.get(8..).ok_or_else(|| {
                                         invalid_data(format_args!(
                                             "palette lump {} too small",
                                             palentry.name.display()
@@ -446,9 +466,10 @@ impl FlatWad {
                                     Some(e.insert(palette).as_slice())
                                 }
                                 Sprite => {
-                                    let pspr = gfx::Sprite::parse(&palentry.entry.data)
+                                    let sprentry = palentry.entry.decompress()?;
+                                    let pspr = gfx::Sprite::parse(&sprentry.data)
                                         .map_err(|e| {
-                                            invalid_data(convert_error(entry.data.as_slice(), e))
+                                            invalid_data(convert_error(sprentry.data.as_slice(), e))
                                         })?
                                         .1;
                                     let palette = match &pspr.palette {
@@ -503,8 +524,9 @@ bitflags::bitflags! {
     }
 }
 
-#[derive(Default)]
-pub struct ExtFiles {
+#[derive(Debug, Default)]
+pub struct ReadPaths {
+    pub filters: crate::FileFilters,
     pub wdd: Option<PathBuf>,
     pub wmd: Option<PathBuf>,
     pub wsd: Option<PathBuf>,
@@ -514,7 +536,7 @@ pub struct ExtFiles {
 pub fn read_rom_or_iwad(
     path: impl AsRef<Path>,
     flags: ReadFlags,
-    ext: &ExtFiles,
+    paths: &ReadPaths,
 ) -> io::Result<(Option<FlatWad>, Option<SoundData>)> {
     let path = path.as_ref();
     let decompress = flags.contains(ReadFlags::DECOMPRESS);
@@ -552,9 +574,9 @@ pub fn read_rom_or_iwad(
                 log::info!("Reading `{}`", filename.display());
                 std::fs::read(filename)
             }
-            let wmd = read_sound_data(&ext.wmd, path, "WMD")?;
-            let wsd = read_sound_data(&ext.wsd, path, "WSD")?;
-            let wdd = read_sound_data(&ext.wdd, path, "WDD")?;
+            let wmd = read_sound_data(&paths.wmd, path, "WMD")?;
+            let wsd = read_sound_data(&paths.wsd, path, "WSD")?;
+            let wdd = read_sound_data(&paths.wdd, path, "WDD")?;
             snd = Some(crate::sound::extract_sound(&wmd, &wsd, &wdd, decompress)?);
         }
     } else {
@@ -614,9 +636,9 @@ pub fn read_rom_or_iwad(
             if flags.contains(ReadFlags::SOUND) {
                 snd = Some(SoundData::default());
             }
-            let wad = crate::remaster::read_wad(&wad, snd.as_mut())?;
+            let wad = crate::remaster::read_wad(&wad, snd.as_mut(), &paths.filters)?;
             if let Some(snd) = snd.as_mut() {
-                let dls = ext
+                let dls = paths
                     .dls
                     .as_ref()
                     .map(|p| Cow::Borrowed(p.as_path()))
@@ -652,7 +674,7 @@ pub fn read_rom_or_iwad(
             Some(wad)
         } else {
             Some(
-                FlatWad::parse(&wad, wad_type, decompress)
+                FlatWad::parse(&wad, wad_type, decompress, &paths.filters)
                     .map(|w| w.1)
                     .map_err(|e| {
                         invalid_data(format!(
@@ -681,7 +703,11 @@ pub fn extract(mut args: Args) -> io::Result<()> {
     args.outdir = Some(args.outdir.unwrap_or_else(|| PathBuf::from("DOOM64")));
     let outdir = args.outdir.as_deref().unwrap();
 
-    let ext = ExtFiles {
+    let paths = ReadPaths {
+        filters: crate::FileFilters {
+            includes: args.include.clone(),
+            excludes: Vec::new(),
+        },
         wdd: args.wdd.clone(),
         wmd: args.wmd.clone(),
         wsd: args.wsd.clone(),
@@ -691,7 +717,7 @@ pub fn extract(mut args: Args) -> io::Result<()> {
     if !args.no_decompress {
         flags |= ReadFlags::DECOMPRESS;
     }
-    let (wad, snd) = read_rom_or_iwad(&args.input, flags, &ext)?;
+    let (wad, snd) = read_rom_or_iwad(&args.input, flags, &paths)?;
     let wad = wad.unwrap();
 
     let mut palettes = PaletteCache::default();
@@ -726,11 +752,11 @@ pub fn extract(mut args: Args) -> io::Result<()> {
         if entry.typ == Marker {
             continue;
         }
-        if let Some(mut file) = args.try_file(
+        if let Some(mut file) = args.try_create_file(
             || subdir_for(entry.typ),
             || name.display(),
             || ext_for(entry.typ),
-            entry.compression.is_compressed().then(|| "LMPZ"),
+            entry.compression.is_compressed().then_some("LMPZ"),
         )? {
             let data = wad.extract_one(index, &mut palettes, args.raw)?;
             file.write_all(&data).unwrap();
@@ -741,7 +767,7 @@ pub fn extract(mut args: Args) -> io::Result<()> {
     }
     if let Some(snd) = snd {
         if !snd.instruments.is_empty() {
-            if let Some(mut file) = args.try_file(
+            if let Some(mut file) = args.try_create_file(
                 || Some("MUSIC"),
                 || Cow::Borrowed("DOOMSND"),
                 || "SF2",
@@ -757,7 +783,7 @@ pub fn extract(mut args: Args) -> io::Result<()> {
         for (index, seq) in &snd.sequences {
             match seq {
                 crate::sound::Sequence::Music(seq) => {
-                    if let Some(mut file) = args.try_file(
+                    if let Some(mut file) = args.try_create_file(
                         || Some("MUSIC"),
                         || Cow::Owned(format!("MUS_{index:03}")),
                         || "MID",
@@ -771,7 +797,7 @@ pub fn extract(mut args: Args) -> io::Result<()> {
                     }
                 }
                 crate::sound::Sequence::Effect(sample) => {
-                    if let Some(mut file) = args.try_file(
+                    if let Some(mut file) = args.try_create_file(
                         || Some("SOUNDS"),
                         || Cow::Owned(format!("SFX_{index:03}")),
                         || "WAV",
@@ -811,7 +837,7 @@ pub fn extract(mut args: Args) -> io::Result<()> {
 }
 
 impl Args {
-    fn try_file<'a>(
+    fn try_create_file<'a>(
         &self,
         mk_subdir: impl FnOnce() -> Option<&'a str>,
         mk_filename: impl FnOnce() -> Cow<'a, str>,

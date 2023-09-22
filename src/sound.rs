@@ -626,7 +626,7 @@ fn extract_instruments<'a, E: ParseError<&'a [u8]>>(
                         data: samp,
                         uncompressed_len,
                         book: Box::new(book.clone()),
-                        loopstate: r#loop.map(|l| Box::new(l.state.clone())),
+                        loopstate: r#loop.map(|l| Box::new(l.state)),
                     }
                 }
             };

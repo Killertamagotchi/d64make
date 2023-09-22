@@ -4,7 +4,7 @@ use crate::{
     gfx, invalid_data,
     sound::SoundData,
     wad::{EntryMap, FlatEntry},
-    EntryName, FlatWad, LumpType, Wad, WadEntry,
+    EntryName, FileFilters, FlatWad, LumpType, Wad, WadEntry,
 };
 use std::{
     borrow::Cow,
@@ -46,7 +46,7 @@ fn load_entry(
     snd: &mut SoundData,
     path: impl AsRef<Path>,
     read: impl FnOnce() -> io::Result<Vec<u8>>,
-    excludes: &[String],
+    filters: &FileFilters,
     base_typ: LumpType,
 ) -> io::Result<()> {
     use LumpType::*;
@@ -60,10 +60,7 @@ fn load_entry(
     if name_str.starts_with('.') || name_str.len() > 8 {
         return Ok(());
     }
-    if excludes
-        .iter()
-        .any(|g| glob_match::glob_match(g, &name_str))
-    {
+    if !filters.matches(&name_str) {
         log::debug!("Skipping file `{}`", path.display());
         return Ok(());
     }
@@ -198,7 +195,7 @@ fn load_entries(
     wad: &mut Wad,
     snd: &mut SoundData,
     path: impl AsRef<Path>,
-    excludes: &[String],
+    filters: &FileFilters,
     meta: Option<std::fs::Metadata>,
     base_typ: LumpType,
     depth: usize,
@@ -209,7 +206,7 @@ fn load_entries(
         None => path.metadata()?,
     };
     if meta.is_file() {
-        load_entry(wad, snd, path, || std::fs::read(path), excludes, base_typ)?;
+        load_entry(wad, snd, path, || std::fs::read(path), filters, base_typ)?;
     } else if meta.is_dir() {
         let name = match path.file_name() {
             Some(n) => n,
@@ -230,7 +227,7 @@ fn load_entries(
                 wad,
                 snd,
                 entry.path(),
-                excludes,
+                filters,
                 Some(meta),
                 base_typ,
                 depth + 1,
@@ -490,6 +487,13 @@ pub fn build(args: Args) -> io::Result<()> {
     let mut iwad = Wad::default();
     let mut pwad = Wad::default();
     let mut snd = SoundData::default();
+    let paths = crate::extract::ReadPaths {
+        filters: crate::FileFilters {
+            includes: Vec::new(),
+            excludes: exclude,
+        },
+        ..Default::default()
+    };
     for input in inputs {
         let ext = input
             .extension()
@@ -501,14 +505,11 @@ pub fn build(args: Args) -> io::Result<()> {
             if !no_sound {
                 flags |= ReadFlags::SOUND;
             }
-            let (flat, isnd) =
-                read_rom_or_iwad(input, flags, &crate::extract::ExtFiles::default())?;
+            let (flat, isnd) = read_rom_or_iwad(input, flags, &paths)?;
             let mut flat = flat.unwrap();
-            if !exclude.is_empty() {
-                flat.entries.retain(|entry| {
-                    let name = entry.name.display();
-                    !exclude.iter().any(|g| glob_match::glob_match(g, &name))
-                });
+            if !paths.filters.is_empty() {
+                flat.entries
+                    .retain(|entry| paths.filters.matches(&entry.name.display()));
             }
             iwad.merge_flat(flat);
             if let Some(isnd) = isnd {
@@ -539,7 +540,7 @@ pub fn build(args: Args) -> io::Result<()> {
                         std::io::Read::read_to_end(&mut afile, &mut data)?;
                         Ok(data)
                     },
-                    &exclude,
+                    &paths.filters,
                     typ,
                 )?;
             }
@@ -549,7 +550,7 @@ pub fn build(args: Args) -> io::Result<()> {
                 &mut pwad,
                 &mut snd,
                 input,
-                &exclude,
+                &paths.filters,
                 None,
                 LumpType::Unknown,
                 0,

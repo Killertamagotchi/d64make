@@ -8,6 +8,7 @@ use crate::{
     invalid_data,
     sound::{Loop, SoundData},
     wad::{FlatWad, LumpType},
+    FileFilters,
 };
 
 pub const REMASTER_WAD_HASH: [u8; 32] =
@@ -42,10 +43,16 @@ fn unhash_texture(tex: &mut [u8], hashes: &HashMap<u16, u16>) {
 }
 
 /// Convert the 2020 remaster WAD back to N64 format
-pub fn read_wad(data: &[u8], mut snd: Option<&mut SoundData>) -> std::io::Result<FlatWad> {
-    let mut wad = context("WAD", |d| FlatWad::parse(d, WadType::Remaster, false))(data)
-        .map_err(|e| invalid_data(convert_error(data, e)))?
-        .1;
+pub fn read_wad(
+    data: &[u8],
+    mut snd: Option<&mut SoundData>,
+    filters: &FileFilters,
+) -> std::io::Result<FlatWad> {
+    let mut wad = context("WAD", |d| {
+        FlatWad::parse(d, WadType::Remaster, false, filters)
+    })(data)
+    .map_err(|e| invalid_data(convert_error(data, e)))?
+    .1;
     let mut remove_ranges = Vec::with_capacity(3);
     let mut cur_start = None;
     let mut in_section = LumpType::Unknown;
@@ -137,10 +144,11 @@ pub fn read_wad(data: &[u8], mut snd: Option<&mut SoundData>) -> std::io::Result
                 }
                 LumpType::Map => {
                     let d = std::mem::take(&mut entry.entry.data);
-                    let mut map =
-                        context("Map WAD", |d| FlatWad::parse(d, WadType::Remaster, false))(&d)
-                            .map_err(|e| invalid_data(convert_error(data, e)))?
-                            .1;
+                    let mut map = context("Map WAD", |d| {
+                        FlatWad::parse(d, WadType::Remaster, false, &Default::default())
+                    })(&d)
+                    .map_err(|e| invalid_data(convert_error(data, e)))?
+                    .1;
                     let sectors = map
                         .entries
                         .iter_mut()

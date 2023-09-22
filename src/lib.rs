@@ -12,6 +12,26 @@ mod wad;
 
 pub use wad::*;
 
+#[derive(Debug, Default)]
+pub struct FileFilters {
+    pub includes: Vec<String>,
+    pub excludes: Vec<String>,
+}
+
+impl FileFilters {
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.includes.is_empty() && self.excludes.is_empty()
+    }
+    pub fn matches(&self, s: &str) -> bool {
+        if !self.includes.is_empty() && !self.includes.iter().any(|f| glob_match::glob_match(f, s))
+        {
+            return false;
+        }
+        !self.excludes.iter().any(|f| glob_match::glob_match(f, s))
+    }
+}
+
 #[inline]
 fn too_large<'a, E: nom::error::ParseError<&'a [u8]>>(input: &'a [u8]) -> nom::Err<E> {
     nom::Err::Error(nom::error::make_error(

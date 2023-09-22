@@ -100,22 +100,28 @@ pub fn inspect(args: Args) -> std::io::Result<()> {
         dls,
     } = args;
     let verbose = crate::is_log_level(log::LevelFilter::Debug);
-    let ext = crate::extract::ExtFiles { wdd, wmd, wsd, dls };
-    let (wad, snd) = extract::read_rom_or_iwad(&input, ReadFlags::IWAD | ReadFlags::SOUND, &ext)?;
+    let paths = crate::extract::ReadPaths {
+        filters: crate::FileFilters {
+            includes: include,
+            excludes: Vec::new(),
+        },
+        wdd,
+        wmd,
+        wsd,
+        dls,
+    };
+    let (wad, snd) = extract::read_rom_or_iwad(&input, ReadFlags::IWAD | ReadFlags::SOUND, &paths)?;
     let wad = wad.unwrap();
     log::info!("WAD Entries: {}", wad.entries.len());
     if !wad.entries.is_empty() {
         log::info!("  SIZE       REALSIZE   NAME     TEST HASH");
         let mut palettes = PaletteCache::default();
         for (index, FlatEntry { name, entry }) in wad.entries.iter().enumerate() {
-            if !include.is_empty() {
-                let name = name.display();
-                if !include.iter().any(|g| glob_match::glob_match(g, &name)) {
-                    continue;
-                }
+            if !paths.filters.is_empty() && !paths.filters.matches(&name.display()) {
+                continue;
             }
             let ok = if test {
-                let data = wad.extract_one(index, &mut palettes, false)?;
+                let data = wad.extract_one(index, &mut palettes, true)?;
                 test_conversion(index, name, entry, &data, &palettes)
             } else {
                 true
