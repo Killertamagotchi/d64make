@@ -310,7 +310,7 @@ impl WadEntry<Vec<u8>> {
         }
         match self.typ.compression() {
             Compression::Lzss(_) => {
-                let data = crate::compression::encode_jaguar(&self.data)?;
+                let data = crate::compression::encode_jaguar(&self.data);
                 let origsize = self.data.len();
                 if data.len() < origsize {
                     return Ok(Cow::Owned(Self {
@@ -320,11 +320,11 @@ impl WadEntry<Vec<u8>> {
                     }));
                 }
             }
+            // broken for now, disable
+            /*
             Compression::Huffman(_) => {
-                /*
-                // broken for now, very slow and crashes so just disable it
-                let data = crate::compression::encode_d64(&self.data)?;
-                let origsize = entry.entry.data.len();
+                let data = crate::compression::encode_d64(&self.data);
+                let origsize = self.data.len();
                 if data.len() < origsize {
                     return Ok(Cow::Owned(Self {
                         typ: self.typ,
@@ -332,8 +332,8 @@ impl WadEntry<Vec<u8>> {
                         data,
                     }));
                 }
-                */
             }
+            */
             _ => {}
         }
         Ok(Cow::Borrowed(self))
