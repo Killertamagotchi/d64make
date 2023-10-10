@@ -1,5 +1,4 @@
-use binread::BinRead;
-use binwrite::BinWrite;
+use binrw::BinRead;
 use ghakuf::formats::{VLQBuilder, VLQ};
 use nom::{
     bytes::complete::{tag, take},
@@ -13,7 +12,7 @@ use std::{
 };
 
 use crate::{
-    sound::{Sequence, SoundData},
+    sound::{NoSeekWrite, Sequence, SoundData},
     too_large,
 };
 
@@ -429,7 +428,7 @@ impl MusicSequence {
         let mut labels = Vec::new();
         let mut eventdata = Vec::new();
         for track in &self.tracks {
-            track.write(w)?;
+            track.write_no_seek(w)?;
             w.write_all(&u16::try_from(track.labels.len()).unwrap().to_be_bytes())?;
             let mut labelidx = 0;
             for (index, event) in track.events.iter().enumerate() {
@@ -708,9 +707,9 @@ impl MusicSequence {
     }
 }
 
-#[derive(Clone, Debug, Default, BinRead, BinWrite)]
-#[br(big)]
-#[binwrite(big)]
+#[derive(Clone, Debug, Default)]
+#[binrw::binrw]
+#[brw(big)]
 pub struct Track {
     pub voices_type: u8,
     pub reverb: u8,
@@ -722,11 +721,9 @@ pub struct Track {
     pub mutebits: u8,
     pub initppq: u16,
     pub initqpm: u16,
-    #[br(ignore)]
-    #[binwrite(ignore)]
+    #[brw(ignore)]
     pub labels: Vec<usize>,
-    #[br(ignore)]
-    #[binwrite(ignore)]
+    #[brw(ignore)]
     pub events: Vec<TimedEvent>,
 }
 

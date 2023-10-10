@@ -1,6 +1,5 @@
 use crate::{convert_error, invalid_data, music::MusicSequence, too_large};
-use binread::BinRead;
-use binwrite::BinWrite;
+use binrw::{BinRead, BinWrite};
 use nom::{
     branch::alt,
     bytes::complete::{tag, take},
@@ -40,19 +39,18 @@ pub struct Sample {
     pub volume: u8,
 }
 
-#[derive(Clone, Debug, BinRead, BinWrite)]
-#[br(big)]
-#[binwrite(big)]
+#[derive(Clone, Debug)]
+#[binrw::binrw]
+#[brw(big)]
 struct Patch {
-    #[br(pad_after(1))]
-    #[binwrite(pad_after(1))]
+    #[brw(pad_after(1))]
     pub cnt: u8,
     pub idx: u16,
 }
 
-#[derive(Clone, Debug, BinRead, BinWrite)]
-#[br(big)]
-#[binwrite(big)]
+#[derive(Clone, Debug)]
+#[binrw::binrw]
+#[brw(big)]
 pub struct PatchMap {
     pub priority: u8,
     pub volume: u8,
@@ -70,8 +68,7 @@ pub struct PatchMap {
     pub release_time: u16,
     pub attack_level: u8,
     pub decay_level: u8,
-    #[br(ignore)]
-    #[binwrite(ignore)]
+    #[brw(ignore)]
     pub sample: Option<Rc<RefCell<PatchInfo>>>,
 }
 
@@ -176,26 +173,24 @@ impl PatchInfo {
     }
 }
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq, BinRead, BinWrite)]
-#[br(big)]
-#[binwrite(big)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+#[binrw::binrw]
+#[brw(big)]
 pub struct Loop {
     pub start: u32,
     pub end: u32,
-    #[br(pad_after(4))]
-    #[binwrite(pad_after(4))]
+    #[brw(pad_after(4))]
     pub count: u32,
 }
 
-#[derive(Clone, Debug, BinRead, BinWrite)]
-#[br(big)]
-#[binwrite(big)]
+#[derive(Clone, Debug)]
+#[binrw::binrw]
+#[brw(big)]
 pub(crate) struct AdpcmLoop {
     pub start: u32,
     pub end: u32,
     pub count: u32,
-    #[br(pad_after(4))]
-    #[binwrite(pad_after(4))]
+    #[brw(pad_after(4))]
     pub state: [i16; 16],
 }
 
@@ -823,7 +818,7 @@ impl SoundData {
                 cnt,
                 idx: patchmap_count as u16,
             };
-            patch.write(w)?;
+            patch.write_no_seek(w)?;
             patchmap_count += cnt as usize;
         }
         for seq in self.sequences.values() {
@@ -832,7 +827,7 @@ impl SoundData {
                     cnt: 1,
                     idx: patchmap_count as u16,
                 };
-                patch.write(w)?;
+                patch.write_no_seek(w)?;
                 patchmap_count += 1;
             }
         }
@@ -855,7 +850,7 @@ impl SoundData {
                         map.sample_id = *entry.get() as u16;
                     }
                 }
-                map.write(w)?;
+                map.write_no_seek(w)?;
             }
             patchmap_count += inst.patchmaps.len();
         }
@@ -872,7 +867,7 @@ impl SoundData {
                     decay_level: 127,
                     ..Default::default()
                 };
-                map.write(w)?;
+                map.write_no_seek(w)?;
                 patchmap_count += 1;
                 sample_count += 1;
             }
@@ -919,9 +914,9 @@ impl SoundData {
         self.foreach_sample(|sample| {
             if let Some(r#loop) = &sample.r#loop {
                 if let SampleData::Adpcm { loopstate, .. } = &sample.samples {
-                    AdpcmLoop::from_loop(r#loop, *loopstate.clone().unwrap()).write(w)?;
+                    AdpcmLoop::from_loop(r#loop, *loopstate.clone().unwrap()).write_no_seek(w)?;
                 } else {
-                    r#loop.write(w)?;
+                    r#loop.write_no_seek(w)?;
                 }
             }
             Ok(())
@@ -1094,5 +1089,20 @@ impl SoundData {
             }
         }
         Ok(())
+    }
+}
+
+pub(crate) trait NoSeekWrite {
+    fn write_no_seek<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()>;
+}
+
+impl<T: BinWrite> NoSeekWrite for T
+where
+    Self: binrw::meta::WriteEndian,
+    for<'a> T::Args<'a>: Default,
+{
+    fn write_no_seek<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.write(&mut binrw::io::NoSeek::new(writer))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }
 }

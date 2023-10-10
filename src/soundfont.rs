@@ -441,10 +441,7 @@ impl SoundData {
                                     }
                                     inst_map.sample_id = amount;
                                     inst_map.sample = Some(info);
-                                    let i = self
-                                        .instruments
-                                        .entry(patch)
-                                        .or_insert_with(Default::default);
+                                    let i = self.instruments.entry(patch).or_default();
                                     i.patchmaps.push(inst_map.clone());
                                     break;
                                 }
