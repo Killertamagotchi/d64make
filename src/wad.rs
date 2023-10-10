@@ -309,40 +309,6 @@ impl WadEntry<Vec<u8>> {
             data,
         }))
     }
-    pub fn compress(&self) -> std::io::Result<Cow<'_, Self>> {
-        if self.compression.is_compressed() {
-            return Ok(Cow::Borrowed(self));
-        }
-        match self.typ.compression() {
-            Compression::Lzss(_) => {
-                let data = crate::compression::encode_jaguar(&self.data);
-                let origsize = self.data.len();
-                if data.len() < origsize {
-                    return Ok(Cow::Owned(Self {
-                        typ: self.typ,
-                        compression: Compression::Lzss(origsize),
-                        data,
-                    }));
-                }
-            }
-            // broken for now, disable
-            /*
-            Compression::Huffman(_) => {
-                let data = crate::compression::encode_d64(&self.data);
-                let origsize = self.data.len();
-                if data.len() < origsize {
-                    return Ok(Cow::Owned(Self {
-                        typ: self.typ,
-                        compression: Compression::Huffman(origsize),
-                        data,
-                    }));
-                }
-            }
-            */
-            _ => {}
-        }
-        Ok(Cow::Borrowed(self))
-    }
 }
 
 impl EntryName {

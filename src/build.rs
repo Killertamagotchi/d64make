@@ -7,7 +7,6 @@ use crate::{
     EntryName, FileFilters, FlatWad, LumpType, Wad, WadEntry,
 };
 use std::{
-    borrow::Cow,
     collections::BTreeMap,
     io,
     path::{Path, PathBuf},
@@ -24,9 +23,6 @@ pub struct Args {
     /// Glob patterns to exclude entry names
     #[arg(short, long)]
     exclude: Vec<String>,
-    /// Do not recompress WAD data
-    #[arg(long, default_value_t = false)]
-    no_compress: bool,
     /// Do not generate WDD/WMD/WSD files
     #[arg(long, default_value_t = false)]
     no_sound: bool,
@@ -249,13 +245,6 @@ fn is_map_wad(path: &impl AsRef<Path>) -> bool {
 }
 
 impl FlatWad {
-    pub fn compress(&mut self) {
-        for entry in &mut self.entries {
-            if let Ok(Cow::Owned(compressed)) = entry.entry.compress() {
-                entry.entry = compressed;
-            }
-        }
-    }
     pub fn write(&self, out: &mut impl std::io::Write, verbose: bool) -> io::Result<()> {
         let count =
             u32::try_from(self.entries.len()).map_err(|_| invalid_data("too many entries"))?;
@@ -477,7 +466,6 @@ pub fn build(args: Args) -> io::Result<()> {
         inputs,
         output,
         exclude,
-        no_compress,
         no_sound,
         wdd,
         wmd,
@@ -559,15 +547,12 @@ pub fn build(args: Args) -> io::Result<()> {
             iwad.merge(std::mem::take(&mut pwad));
         }
     }
-    let mut flat = iwad.flatten();
+    let flat = iwad.flatten();
     log::info!(
         "Writing `{}` with {} entries",
         output.display(),
         flat.entries.len()
     );
-    if !no_compress {
-        flat.compress();
-    }
     log::debug!("  SIZE       NAME     HASH");
     {
         let out = std::fs::File::create(&output)?;
