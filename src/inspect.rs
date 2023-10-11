@@ -139,8 +139,8 @@ pub fn inspect(args: Args) -> std::io::Result<()> {
             } else {
                 "-   "
             };
-            let hash = crate::hash(&entry.data);
-            log::info!("  0x{size: <8x} 0x{realsize: <8x} {name: <8} {stat} 0x{hash:016x}");
+            let hash = blake3::hash(&entry.data);
+            log::info!("  0x{size: <8x} 0x{realsize: <8x} {name: <8} {stat} 0x{hash}");
         }
     }
     if let Some(snd) = snd {

@@ -27,8 +27,11 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     no_sound: bool,
     /// Ignore errors when parsing input files
-    #[arg(short, long, default_value_t = false)]
+    #[arg(long, default_value_t = false)]
     ignore_errors: bool,
+    /// Apply minor vanilla asset fixes
+    #[arg(long, default_value_t = true)]
+    apply_fixes: bool,
     /// Path to output WDD to [default: DOOM64.WDD]
     #[arg(long)]
     wdd: Option<PathBuf>,
@@ -40,13 +43,18 @@ pub struct Args {
     wsd: Option<PathBuf>,
 }
 
+struct LoadOptions<'a> {
+    filters: &'a FileFilters,
+    ignore_errors: bool,
+}
+
 fn load_entry(
     wad: &mut Wad,
     snd: &mut SoundData,
     path: impl AsRef<Path>,
     read: impl FnOnce() -> io::Result<Vec<u8>>,
-    filters: &FileFilters,
     base_typ: LumpType,
+    options: &LoadOptions,
 ) -> io::Result<()> {
     use LumpType::*;
 
@@ -59,7 +67,7 @@ fn load_entry(
     if name_str.starts_with('.') || name_str.len() > 8 {
         return Ok(());
     }
-    if !filters.matches(&name_str) {
+    if !options.filters.matches(&name_str) {
         log::debug!("Skipping file `{}`", path.display());
         return Ok(());
     }
@@ -189,21 +197,14 @@ fn type_for_dir(name: &std::ffi::OsStr) -> Option<LumpType> {
     })
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum ErrorLevel {
-    Warn,
-    ErrorOnWarn,
-}
-
 fn load_entries(
     wad: &mut Wad,
     snd: &mut SoundData,
     path: impl AsRef<Path>,
-    filters: &FileFilters,
     meta: Option<std::fs::Metadata>,
     base_typ: LumpType,
     depth: usize,
-    error_level: ErrorLevel,
+    options: &LoadOptions,
 ) -> io::Result<()> {
     let path = path.as_ref();
     let meta = match meta {
@@ -211,16 +212,12 @@ fn load_entries(
         None => path.metadata()?,
     };
     if meta.is_file() {
-        let res = load_entry(wad, snd, path, || std::fs::read(path), filters, base_typ);
+        let res = load_entry(wad, snd, path, || std::fs::read(path), base_typ, options);
         if let Err(err) = res {
             let err = format!("Error reading {}: {err}", path.display());
-            match error_level {
-                ErrorLevel::Warn => {
-                    log::warn!("{err}");
-                }
-                ErrorLevel::ErrorOnWarn => {
-                    return Err(invalid_data(err));
-                }
+            match options.ignore_errors {
+                true => log::warn!("{err}"),
+                false => return Err(invalid_data(err)),
             }
         }
     } else if meta.is_dir() {
@@ -243,11 +240,10 @@ fn load_entries(
                 wad,
                 snd,
                 entry.path(),
-                filters,
                 Some(meta),
                 base_typ,
                 depth + 1,
-                error_level,
+                options,
             )?;
         }
     }
@@ -287,8 +283,8 @@ impl FlatWad {
             if verbose {
                 let size = entry.entry.data.len();
                 let name = entry.name.display();
-                let hash = crate::hash(&entry.entry.data);
-                log::debug!("  0x{size: <8x} {name: <8} 0x{hash:016x}");
+                let hash = blake3::hash(&entry.entry.data);
+                log::debug!("  0x{size: <8x} {name: <8} 0x{hash}");
             }
             const PAD_BYTES: [u8; 4] = [0; 4];
             out.write_all(&entry.entry.data)?;
@@ -367,11 +363,11 @@ impl Wad {
         self.maps.sort_by(name_sort);
         self.palettes.sort_by(name_sort);
         self.sprites.sort_by(name_sort);
-        order_fixed(&mut self.sprites, crate::orders::SPRITE_ORDER);
+        order_fixed(&mut self.sprites, crate::lumps::SPRITE_ORDER);
         self.textures.sort_by(name_sort);
-        order_fixed(&mut self.textures, crate::orders::TEXTURE_ORDER);
+        order_fixed(&mut self.textures, crate::lumps::TEXTURE_ORDER);
         self.flats.sort_by(name_sort);
-        order_fixed(&mut self.flats, crate::orders::FLAT_ORDER);
+        order_fixed(&mut self.flats, crate::lumps::FLAT_ORDER);
         self.graphics.sort_by(name_sort);
         self.hud_graphics.sort_by(name_sort);
         self.skies.sort_by(name_sort);
@@ -471,6 +467,7 @@ pub fn build(args: Args) -> io::Result<()> {
         exclude,
         no_sound,
         ignore_errors,
+        apply_fixes,
         wdd,
         wmd,
         wsd,
@@ -485,10 +482,9 @@ pub fn build(args: Args) -> io::Result<()> {
         },
         ..Default::default()
     };
-    let error_level = if ignore_errors {
-        ErrorLevel::Warn
-    } else {
-        ErrorLevel::ErrorOnWarn
+    let load_options = LoadOptions {
+        filters: &paths.filters,
+        ignore_errors,
     };
     for input in inputs {
         let ext = input
@@ -537,8 +533,8 @@ pub fn build(args: Args) -> io::Result<()> {
                         std::io::Read::read_to_end(&mut afile, &mut data)?;
                         Ok(data)
                     },
-                    &paths.filters,
                     typ,
+                    &load_options,
                 );
                 if let Err(err) = res {
                     let err = format!(
@@ -546,13 +542,9 @@ pub fn build(args: Args) -> io::Result<()> {
                         input.display(),
                         name.display()
                     );
-                    match error_level {
-                        ErrorLevel::Warn => {
-                            log::warn!("{err}");
-                        }
-                        ErrorLevel::ErrorOnWarn => {
-                            return Err(invalid_data(err));
-                        }
+                    match ignore_errors {
+                        true => log::warn!("{err}"),
+                        false => return Err(invalid_data(err)),
                     }
                 }
             }
@@ -565,17 +557,32 @@ pub fn build(args: Args) -> io::Result<()> {
                 &mut pwad,
                 &mut snd,
                 input,
-                &paths.filters,
                 None,
                 LumpType::Unknown,
                 0,
-                error_level,
+                &load_options,
             )?;
             pwad.sort();
             iwad.merge(pwad);
         }
     }
-    let flat = iwad.flatten();
+    let mut flat = iwad.flatten();
+    for entry in &mut flat.entries {
+        if apply_fixes {
+            if let Some((hash, fixes)) = crate::lumps::VANILLA_FIXES.get(&entry.name.0) {
+                if hash == blake3::hash(&entry.entry.data).as_bytes() {
+                    for (offset, patch) in fixes.iter().copied() {
+                        log::debug!(
+                            "Patching {} at offset 0x{offset:x}, len {}",
+                            entry.name.display(),
+                            patch.len()
+                        );
+                        entry.entry.data[offset..offset + patch.len()].copy_from_slice(patch);
+                    }
+                }
+            }
+        }
+    }
     log::info!(
         "Writing `{}` with {} entries",
         output.display(),

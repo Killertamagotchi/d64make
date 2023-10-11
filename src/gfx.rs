@@ -507,8 +507,11 @@ impl Texture {
         decoder.remember_unknown_chunks(true);
         let png = decoder.decode(data).map_err(invalid_data)?;
         let info = decoder.info_png();
-        if info.color.colortype() != lodepng::ColorType::PALETTE || info.color.palette().len() > 16 {
-            return Err(invalid_data("Texture PNG must be indexed color with <= 16 palette entries"));
+        if info.color.colortype() != lodepng::ColorType::PALETTE || info.color.palette().len() > 16
+        {
+            return Err(invalid_data(
+                "Texture PNG must be indexed color with <= 16 palette entries",
+            ));
         }
         let bitmap = match png {
             lodepng::Image::RawData(b) => b,
@@ -538,18 +541,36 @@ impl Texture {
             palettes.insert(0, <_>::try_from(palette).unwrap());
         }
         let data = match info.color.bitdepth() {
-            1 => bitmap.buffer.into_iter().map(|i| [
-                (i & 0b1) | ((i & 0b10) << 3),
-                ((i & 0b100) >> 2) | ((i & 0b1000) << 1),
-                ((i & 0b10000) >> 4) | ((i & 0b100000) >> 1),
-                ((i & 0b1000000) >> 6) | ((i & 0b10000000) >> 3),
-            ].into_iter()).flatten().collect(),
-            2 => bitmap.buffer.into_iter().map(|i| [
-                (i & 0b11) | ((i & 0b1100) << 2),
-                ((i & 0b110000) >> 4) | ((i & 0b11000000) >> 2),
-            ].into_iter()).flatten().collect(),
+            1 => bitmap
+                .buffer
+                .into_iter()
+                .flat_map(|i| {
+                    [
+                        (i & 0b1) | ((i & 0b10) << 3),
+                        ((i & 0b100) >> 2) | ((i & 0b1000) << 1),
+                        ((i & 0b10000) >> 4) | ((i & 0b100000) >> 1),
+                        ((i & 0b1000000) >> 6) | ((i & 0b10000000) >> 3),
+                    ]
+                    .into_iter()
+                })
+                .collect(),
+            2 => bitmap
+                .buffer
+                .into_iter()
+                .flat_map(|i| {
+                    [
+                        (i & 0b11) | ((i & 0b1100) << 2),
+                        ((i & 0b110000) >> 4) | ((i & 0b11000000) >> 2),
+                    ]
+                    .into_iter()
+                })
+                .collect(),
             4 => bitmap.buffer,
-            8 => bitmap.buffer.chunks_exact(2).map(|c| (c[0] & 0b1111) | (c[1] << 4)).collect(),
+            8 => bitmap
+                .buffer
+                .chunks_exact(2)
+                .map(|c| (c[0] & 0b1111) | (c[1] << 4))
+                .collect(),
             _ => unreachable!(),
         };
 

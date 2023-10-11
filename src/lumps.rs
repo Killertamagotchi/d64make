@@ -1,3 +1,5 @@
+use hex_literal::hex;
+
 pub const SPRITE_ORDER: &[&[u8]] = &[
     b"A001A0",
     b"A003A0",
@@ -1014,3 +1016,43 @@ pub const FLAT_ORDER: &[&[u8]] = &[
     b"F_SKYA", b"F_SKYB", b"F_SKYC", b"F_SKYD", b"F_SKYE", b"F_SKYF", b"F_SKYG", b"F_SKYH",
     b"F_SKYI", b"F_SKYJ", b"F_SKYK",
 ];
+
+// lump name => (hash, [(offset, data)])
+#[allow(clippy::type_complexity)]
+pub const VANILLA_FIXES: phf::Map<&[u8], ([u8; 32], &[(usize, &[u8])])> = phf::phf_map! {
+    // x offset fixes
+    b"PLAYB1" => (hex!("eef0fa2ce7b57b438dd7435acb4e21fb935e0a77fd9458398e1e58b0071990d1"), &[(6, &15i16.to_be_bytes())]),
+    b"PLAYC1" => (hex!("19d36d133c963921c105d46d449b1f3984f157d137a35a178dfac0d961007c24"), &[(6, &18i16.to_be_bytes())]),
+    b"PLAYD1" => (hex!("402383538259dcea11c1497ed556816907bf1b4e147fd8a91c702f380498dd25"), &[(6, &19i16.to_be_bytes())]),
+    b"PLAYF1" => (hex!("1f6210b3551840afa9a6983e9c08d5b7de2d7a78d01fb7de4f6792ba14965901"), &[(6, &14i16.to_be_bytes())]),
+    b"PLAYA2A8" => (hex!("f6b53b7456bdd297feb693db767f4414f8721ed2e8db0c3e96cb89b9c5599ea7"), &[(6, &26i16.to_be_bytes())]),
+    b"PLAYB2B8" => (hex!("c2fdf68abcad9d71fa125e2fb0bb79de33a07257f5b1c57762a3bc80a3b4da6c"), &[(6, &19i16.to_be_bytes())]),
+    b"PLAYC2C8" => (hex!("2098a01691ecb25093f9aa923afc683aaf21a39e5e8f2beddba79b4f49a9b490"), &[(6, &25i16.to_be_bytes())]),
+    b"PLAYD2D8" => (hex!("f97b66cbf3c33dcbbbb7dbc061da7546c85ff3cddca55aeb5a2b611494c86aaa"), &[(6, &36i16.to_be_bytes())]),
+    b"PLAYE2E8" => (hex!("b37ea905ff74321fc81461c99e68f41a1fd0287349e785d651b43f57c1e7e2c2"), &[(6, &27i16.to_be_bytes())]),
+    b"PLAYF2F8" => (hex!("466caad17def11769a5751aa6b628297b81a4ef23729ffe409fe9dd27360b78c"), &[(6, &28i16.to_be_bytes())]),
+    b"PLAYG2G8" => (hex!("aac0beaf6e06618392fe5c7717db3d6f451a6573f6843c47dce37dd18e871b3c"), &[(6, &21i16.to_be_bytes())]),
+    b"PLAYA3A7" => (hex!("01781ea5de7c62beab5f7866ec6a4a0db3770ab844ba5674507db66642d7a6a1"), &[(6, &34i16.to_be_bytes())]),
+    b"PLAYB3B7" => (hex!("d96810818587afc8ec08909e991cf3fe8160de0d31879ded3750badb7c1a6a3c"), &[(6, &33i16.to_be_bytes())]),
+    b"PLAYC3C7" => (hex!("024354daf653b0a4013126599409c62d9265e18fe171f348fb594471bfc62bab"), &[(6, &35i16.to_be_bytes())]),
+    b"PLAYD3D7" => (hex!("63b917eaeb1f23df81d1333dcc04c9ef4eec16f52bb3b5f775b24acf582753ad"), &[(6, &39i16.to_be_bytes())]),
+    b"PLAYE3E7" => (hex!("707902ed0d4fc906bda991c7e12bcdccf1e55297f785d3fe48f2bcae92f6975b"), &[(6, &41i16.to_be_bytes())]),
+    b"PLAYF3F7" => (hex!("66e754c5e3d14ea7361f3782c993a7527c57bedafa2861cf374fe57ebee9171a"), &[(6, &42i16.to_be_bytes())]),
+    b"PLAYG3G7" => (hex!("c2db9c314442c89c37081ecfcbc08b1dca05b059ddce550ef2074bb8f8adf35c"), &[(6, &20i16.to_be_bytes())]),
+    b"PLAYA4A6" => (hex!("77cb7f040a85e039a3f3a55a3c3c21884023bc504770c2afecf9a4281c2468dc"), &[(6, &18i16.to_be_bytes())]),
+    b"PLAYB4B6" => (hex!("df96ba87034ff0e25c70ffc3fc2be733427b2fac95b56e77dbcb4c8eb0d8fe1e"), &[(6, &21i16.to_be_bytes())]),
+    b"PLAYC4C6" => (hex!("3afeec24f965ebd03cde551d5a35ae85f36f7e9207657b5f8e7300aa3752a0b7"), &[(6, &21i16.to_be_bytes())]),
+    b"PLAYD4D6" => (hex!("9107b93e9dbb15d9713a4b24ce0fa5479569b0b99e2b2d7dc85b35e0349abb39"), &[(6, &21i16.to_be_bytes())]),
+    b"PLAYE4E6" => (hex!("2a590436825ae76898ff64b550f0dd7fa4eb559ff801ecd43043dd9309a3b606"), &[(6, &27i16.to_be_bytes())]),
+    b"PLAYF4F6" => (hex!("bb5b71dba6123614a3339bc52f15ab376c8d2073d28c7f51f03bfe8ef0d39d5b"), &[(6, &28i16.to_be_bytes())]),
+    b"PLAYG4G6" => (hex!("88e60f274e9352a77b58ee4c108cece26e8379d195a0ced66131dc016abcc71e"), &[(6, &13i16.to_be_bytes())]),
+    b"PLAYA5" => (hex!("cec65fd9abd6992c812fc1894cbf814ba87377e8729529990a4218fe2cc2ef76"), &[(6, &13i16.to_be_bytes())]),
+    b"PLAYB5" => (hex!("be61e06e78010554c994dc8155483fb69b9a414f382bbf49658426c30b457a67"), &[(6, &13i16.to_be_bytes())]),
+    b"PLAYC5" => (hex!("6890d4e652629849bb859983c7981274b9fc7bb85f61a947437ae00f86eb5c1c"), &[(6, &14i16.to_be_bytes())]),
+    b"PLAYD5" => (hex!("85ff189b551984c548d64c78929aef51695a57bfe0866a95a774ec419dbc9137"), &[(6, &16i16.to_be_bytes())]),
+    b"PLAYE5" => (hex!("2ecbdb8aa8951d714ddc7c66c83177c8046b830e04b5065832ebd7bcdec8aed0"), &[(6, &13i16.to_be_bytes())]),
+    b"PLAYF5" => (hex!("eeb4c44ba74a2d439288e381c3190f6e5172a43776229351119d08ffa1fa082f"), &[(6, &13i16.to_be_bytes())]),
+    b"PLAYG5" => (hex!("6efb31b52ed707d1728fb16b8f951a44d496617375ca200b27fa494db6176837"), &[(6, &16i16.to_be_bytes())]),
+    // erroneous transparent pixels
+    b"SFLATAR" => (hex!("aec36369dc7f88637dfcbea914c9e67076636d12b3b91c9fd96e461ef50300a1"), &[(0xa8, &[0xdb]), (0x314, &[0xbd])]),
+};
