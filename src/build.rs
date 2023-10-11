@@ -384,61 +384,43 @@ impl Wad {
         flat.entries.push(FlatEntry::marker("S_START"));
         for (name, mut sprite) in self.sprites {
             let name = name.0;
-            let mut palindex = None;
             if name.len() >= 4 && !name.starts_with(b"PAL") {
                 use std::collections::btree_map::Entry;
 
                 let prefix = <[u8; 4]>::try_from(&name[..4]).unwrap();
-                match sprite_prefixes.entry(prefix) {
+                let palettes = match sprite_prefixes.entry(prefix) {
                     Entry::Vacant(entry) => {
                         let index = flat.entries.len();
                         let pal_prefix =
                             [b'P', b'A', b'L', prefix[0], prefix[1], prefix[2], prefix[3]];
-                        let mut has_palette = false;
-                        while let Some((name, palette)) =
-                            take_entry(&mut self.palettes, |k, _| k.0.starts_with(&pal_prefix))
-                        {
-                            has_palette = true;
+                        let mut palettes = Vec::new();
+                        while let Some((name, palette)) = take_entry(&mut self.palettes, |k, _| {
+                            k.0.starts_with(&pal_prefix) && k.0.len() == 8
+                        }) {
                             let mut data = vec![0; palette.data.len() * 2 + 8];
                             data[2] = 1;
                             gfx::palette_rgba_to_16(&palette.data, &mut data[8..]);
+                            palettes.push(palette.data);
                             flat.entries.push(FlatEntry::new_entry(
                                 name,
                                 WadEntry::new(LumpType::Palette, data),
                             ));
                         }
-                        // only makes sense to remove palette from image if the palettes all match
-                        /*
-                        if !has_palette {
-                            if let gfx::SpritePalette::Rgb8(palette) = &sprite.data.palette {
-                                has_palette = true;
-
-                                let mut data = vec![0; palette.len() * 2 + 8];
-                                data[2] = 1;
-                                gfx::palette_rgba_to_16(palette.as_slice(), &mut data[8..]);
-
-                                let mut pal_name = ArrayVec::<u8, 8>::new();
-                                pal_name.try_extend_from_slice(&pal_prefix).unwrap();
-                                pal_name.push(b'0');
-
-                                flat.entries.push(FlatEntry::new_entry(
-                                    EntryName(pal_name),
-                                    WadEntry::new(LumpType::Palette, data),
-                                ));
-                            }
-                        }
-                        */
-                        if has_palette {
-                            entry.insert(index);
-                            palindex = Some(index);
+                        (!palettes.is_empty()).then(|| entry.insert((index, palettes)))
+                    }
+                    Entry::Occupied(entry) => Some(entry.into_mut()),
+                };
+                if let Some((index, palettes)) = palettes {
+                    if let gfx::SpritePalette::Rgb8(sprite_pal) = &sprite.data.palette {
+                        if let Some(offset) =
+                            palettes.iter().position(|p| p == sprite_pal.as_slice())
+                        {
+                            let index = u16::try_from(flat.entries.len() - *index + offset)
+                                .expect("too many sprites");
+                            sprite.data.palette = gfx::SpritePalette::Offset(index);
                         }
                     }
-                    Entry::Occupied(entry) => palindex = Some(*entry.get()),
                 }
-            }
-            if let Some(index) = palindex {
-                let index = u16::try_from(flat.entries.len() - index).expect("too many sprites");
-                sprite.data.palette = gfx::SpritePalette::Offset(index);
             }
             flat.entries
                 .push(FlatEntry::new_entry(EntryName(name), sprite));
