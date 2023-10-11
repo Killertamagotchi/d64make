@@ -495,7 +495,6 @@ pub fn build(args: Args) -> io::Result<()> {
     } = args;
     let output = output.unwrap_or_else(|| PathBuf::from("DOOM64.WAD"));
     let mut iwad = Wad::default();
-    let mut pwad = Wad::default();
     let mut snd = SoundData::default();
     let paths = crate::extract::ReadPaths {
         filters: crate::FileFilters {
@@ -534,6 +533,7 @@ pub fn build(args: Args) -> io::Result<()> {
             log::info!("Reading `{}`", input.display());
             let mut file = std::fs::File::open(&input)?;
             let mut arc = zip::ZipArchive::new(&mut file).map_err(invalid_data)?;
+            let mut pwad = Wad::default();
             for index in 0..arc.len() {
                 let mut afile = arc.by_index(index).map_err(invalid_data)?;
                 let name = match (afile.is_file(), afile.enclosed_name()) {
@@ -574,8 +574,11 @@ pub fn build(args: Args) -> io::Result<()> {
                     }
                 }
             }
+            pwad.sort();
+            iwad.merge(pwad);
         } else {
             log::info!("Reading `{}`", input.display());
+            let mut pwad = Wad::default();
             load_entries(
                 &mut pwad,
                 &mut snd,
@@ -584,9 +587,10 @@ pub fn build(args: Args) -> io::Result<()> {
                 None,
                 LumpType::Unknown,
                 0,
+                error_level,
             )?;
             pwad.sort();
-            iwad.merge(std::mem::take(&mut pwad));
+            iwad.merge(pwad);
         }
     }
     let flat = iwad.flatten();
