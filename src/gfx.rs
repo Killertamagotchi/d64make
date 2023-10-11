@@ -367,17 +367,17 @@ impl Graphic {
         self.write(&mut buf, typ).unwrap();
         buf
     }
-    pub fn read_png(data: &[u8], convert: bool) -> lodepng::Result<Self> {
+    pub fn read_png(data: &[u8], convert: bool) -> io::Result<Self> {
         let mut decoder = lodepng::Decoder::new();
         decoder.color_convert(false);
-        let png = decoder.decode(data)?;
+        let png = decoder.decode(data).map_err(invalid_data)?;
         let info = decoder.info_png();
         let ct = info.color.colortype();
         if ct == lodepng::ColorType::RGBA && convert {
             let (palette, b) = convert_rgba32_to_ci8(png);
             return Ok(Self {
-                width: b.width.try_into().map_err(|_| lodepng::Error::new(92))?,
-                height: b.height.try_into().map_err(|_| lodepng::Error::new(92))?,
+                width: b.width.try_into().map_err(invalid_data)?,
+                height: b.height.try_into().map_err(invalid_data)?,
                 data: b.buffer,
                 palette: Some(palette),
             });
@@ -385,7 +385,9 @@ impl Graphic {
         if !matches!(ct, lodepng::ColorType::PALETTE | lodepng::ColorType::GREY)
             || info.color.bitdepth() != 8
         {
-            return Err(lodepng::Error::new(31));
+            return Err(invalid_data(
+                "Graphic PNG must be 4-bit or 8-bit indexed color",
+            ));
         }
         let (data, palette, width, height) = match png {
             lodepng::Image::RawData(b) => (
@@ -403,8 +405,8 @@ impl Graphic {
             _ => unreachable!(),
         };
         Ok(Self {
-            width: width.try_into().map_err(|_| lodepng::Error::new(92))?,
-            height: height.try_into().map_err(|_| lodepng::Error::new(92))?,
+            width: width.try_into().map_err(invalid_data)?,
+            height: height.try_into().map_err(invalid_data)?,
             data,
             palette,
         })
@@ -499,25 +501,27 @@ impl Texture {
         self.write(&mut buf).unwrap();
         buf
     }
-    pub fn read_png(data: &[u8]) -> lodepng::Result<Self> {
+    pub fn read_png(data: &[u8]) -> io::Result<Self> {
         let mut decoder = lodepng::Decoder::new();
         decoder.color_convert(false);
         decoder.remember_unknown_chunks(true);
-        let png = decoder.decode(data)?;
+        let png = decoder.decode(data).map_err(invalid_data)?;
         let info = decoder.info_png();
-        if info.color.colortype() != lodepng::ColorType::PALETTE || info.color.bitdepth() != 4 {
-            return Err(lodepng::Error::new(31));
+        if info.color.colortype() != lodepng::ColorType::PALETTE || info.color.palette().len() > 16 {
+            return Err(invalid_data("Texture PNG must be indexed color with <= 16 palette entries"));
         }
         let bitmap = match png {
             lodepng::Image::RawData(b) => b,
             _ => unreachable!(),
         };
-        if bitmap.width < 2
-            || bitmap.height < 2
-            || !bitmap.width.is_power_of_two()
-            || !bitmap.height.is_power_of_two()
-        {
-            return Err(lodepng::Error::new(92));
+        if bitmap.width < 2 || !bitmap.width.is_power_of_two() {
+            return Err(invalid_data("Texture PNG must have a power-of-two width"));
+        }
+        if bitmap.height < 2 || !bitmap.height.is_power_of_two() {
+            return Err(invalid_data("Texture PNG must have a power-of-two height"));
+        }
+        if bitmap.width * bitmap.height > 4096 {
+            return Err(invalid_data("Texture too large to fit in TMEM"));
         }
         let wshift = bitmap.width.trailing_zeros() as u16;
         let hshift = bitmap.height.trailing_zeros() as u16;
@@ -533,20 +537,37 @@ impl Texture {
         for palette in info.color.palette().chunks_exact(16).rev() {
             palettes.insert(0, <_>::try_from(palette).unwrap());
         }
+        let data = match info.color.bitdepth() {
+            1 => bitmap.buffer.into_iter().map(|i| [
+                (i & 0b1) | ((i & 0b10) << 3),
+                ((i & 0b100) >> 2) | ((i & 0b1000) << 1),
+                ((i & 0b10000) >> 4) | ((i & 0b100000) >> 1),
+                ((i & 0b1000000) >> 6) | ((i & 0b10000000) >> 3),
+            ].into_iter()).flatten().collect(),
+            2 => bitmap.buffer.into_iter().map(|i| [
+                (i & 0b11) | ((i & 0b1100) << 2),
+                ((i & 0b110000) >> 4) | ((i & 0b11000000) >> 2),
+            ].into_iter()).flatten().collect(),
+            4 => bitmap.buffer,
+            8 => bitmap.buffer.chunks_exact(2).map(|c| (c[0] & 0b1111) | (c[1] << 4)).collect(),
+            _ => unreachable!(),
+        };
 
         Ok(Self {
             wshift,
             hshift,
-            data: bitmap.buffer,
+            data,
             palettes,
         })
     }
-    pub fn write_png(&self) -> lodepng::Result<Vec<u8>> {
+    pub fn write_png(&self) -> io::Result<Vec<u8>> {
         let mut encoder = lodepng::Encoder::new();
         encoder.set_auto_convert(false);
         let mut palettes = self.palettes.iter();
-        let first_palette = palettes.next().ok_or_else(|| lodepng::Error::new(68))?;
-        encoder.set_palette(first_palette)?;
+        let first_palette = palettes
+            .next()
+            .ok_or_else(|| invalid_data("Texture must have at least one palette"))?;
+        encoder.set_palette(first_palette).map_err(invalid_data)?;
         let mut pal_count = 1usize;
         let info = encoder.info_png_mut();
         for palette in palettes {
@@ -561,14 +582,17 @@ impl Texture {
                 splt.push(rgba.a);
                 splt.extend_from_slice(&[0, 0]);
             }
-            info.create_chunk(lodepng::ChunkPosition::PLTE, b"sPLT", &splt)?;
+            info.create_chunk(lodepng::ChunkPosition::PLTE, b"sPLT", &splt)
+                .map_err(invalid_data)?;
             pal_count += 1;
         }
         encoder.info_png_mut().color.set_bitdepth(4);
         encoder.info_raw_mut().set_bitdepth(4);
         let width = 1usize << self.wshift as usize;
         let height = 1usize << self.hshift as usize;
-        encoder.encode(&self.data, width, height)
+        encoder
+            .encode(&self.data, width, height)
+            .map_err(invalid_data)
     }
 }
 
@@ -759,11 +783,11 @@ impl Sprite {
         self.write(&mut buf).unwrap();
         buf
     }
-    pub fn read_png(data: &[u8], convert: Option<u8>) -> lodepng::Result<Self> {
+    pub fn read_png(data: &[u8], convert: Option<u8>) -> io::Result<Self> {
         let mut decoder = lodepng::Decoder::new();
         decoder.color_convert(false);
         decoder.remember_unknown_chunks(true);
-        let png = decoder.decode(data)?;
+        let png = decoder.decode(data).map_err(invalid_data)?;
         let info = decoder.info_png();
         let depth = info.color.bitdepth();
         let (x_offset, y_offset) = info
@@ -776,8 +800,8 @@ impl Sprite {
                 return Ok(Self {
                     x_offset,
                     y_offset,
-                    width: b.width.try_into().map_err(|_| lodepng::Error::new(92))?,
-                    height: b.height.try_into().map_err(|_| lodepng::Error::new(92))?,
+                    width: b.width.try_into().map_err(invalid_data)?,
+                    height: b.height.try_into().map_err(invalid_data)?,
                     data: b.buffer,
                     palette: SpritePalette::Rgb8(palette),
                 });
@@ -786,15 +810,17 @@ impl Sprite {
                 return Ok(Self {
                     x_offset,
                     y_offset,
-                    width: b.width.try_into().map_err(|_| lodepng::Error::new(92))?,
-                    height: b.height.try_into().map_err(|_| lodepng::Error::new(92))?,
+                    width: b.width.try_into().map_err(invalid_data)?,
+                    height: b.height.try_into().map_err(invalid_data)?,
                     data: b.buffer,
                     palette: SpritePalette::Rgb4(palette),
                 });
             }
         }
         if info.color.colortype() != lodepng::ColorType::PALETTE || (depth != 4 && depth != 8) {
-            return Err(lodepng::Error::new(31));
+            return Err(invalid_data(
+                "Sprite PNG must be 4-bit or 8-bit indexed color",
+            ));
         }
         let mut bitmap = match png {
             lodepng::Image::RawData(b) => b,
@@ -839,14 +865,8 @@ impl Sprite {
         Ok(Self {
             x_offset,
             y_offset,
-            width: bitmap
-                .width
-                .try_into()
-                .map_err(|_| lodepng::Error::new(92))?,
-            height: bitmap
-                .height
-                .try_into()
-                .map_err(|_| lodepng::Error::new(92))?,
+            width: bitmap.width.try_into().map_err(invalid_data)?,
+            height: bitmap.height.try_into().map_err(invalid_data)?,
             data: bitmap.buffer,
             palette,
         })

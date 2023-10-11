@@ -26,6 +26,9 @@ pub struct Args {
     /// Do not generate WDD/WMD/WSD files
     #[arg(long, default_value_t = false)]
     no_sound: bool,
+    /// Ignore errors when parsing input files
+    #[arg(short, long, default_value_t = false)]
+    ignore_errors: bool,
     /// Path to output WDD to [default: DOOM64.WDD]
     #[arg(long)]
     wdd: Option<PathBuf>,
@@ -101,8 +104,7 @@ fn load_entry(
             .map_err(invalid_data)?
             .to_vec(),
         (Sprite | HudGraphic | Sky, true) => gfx::Sprite::read_png(&data, None)
-            .map_err(invalid_data)
-            .unwrap()
+            .map_err(invalid_data)?
             .to_vec(),
         _ => data,
     };
@@ -187,6 +189,12 @@ fn type_for_dir(name: &std::ffi::OsStr) -> Option<LumpType> {
     })
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ErrorLevel {
+    Warn,
+    ErrorOnWarn,
+}
+
 fn load_entries(
     wad: &mut Wad,
     snd: &mut SoundData,
@@ -195,6 +203,7 @@ fn load_entries(
     meta: Option<std::fs::Metadata>,
     base_typ: LumpType,
     depth: usize,
+    error_level: ErrorLevel,
 ) -> io::Result<()> {
     let path = path.as_ref();
     let meta = match meta {
@@ -202,7 +211,18 @@ fn load_entries(
         None => path.metadata()?,
     };
     if meta.is_file() {
-        load_entry(wad, snd, path, || std::fs::read(path), filters, base_typ)?;
+        let res = load_entry(wad, snd, path, || std::fs::read(path), filters, base_typ);
+        if let Err(err) = res {
+            let err = format!("Error reading {}: {err}", path.display());
+            match error_level {
+                ErrorLevel::Warn => {
+                    log::warn!("{err}");
+                }
+                ErrorLevel::ErrorOnWarn => {
+                    return Err(invalid_data(err));
+                }
+            }
+        }
     } else if meta.is_dir() {
         let name = match path.file_name() {
             Some(n) => n,
@@ -219,7 +239,7 @@ fn load_entries(
                 Ok(meta) => meta,
                 Err(_) => continue,
             };
-            let _ = load_entries(
+            load_entries(
                 wad,
                 snd,
                 entry.path(),
@@ -227,7 +247,8 @@ fn load_entries(
                 Some(meta),
                 base_typ,
                 depth + 1,
-            );
+                error_level,
+            )?;
         }
     }
     Ok(())
@@ -467,6 +488,7 @@ pub fn build(args: Args) -> io::Result<()> {
         output,
         exclude,
         no_sound,
+        ignore_errors,
         wdd,
         wmd,
         wsd,
@@ -481,6 +503,11 @@ pub fn build(args: Args) -> io::Result<()> {
             excludes: exclude,
         },
         ..Default::default()
+    };
+    let error_level = if ignore_errors {
+        ErrorLevel::Warn
+    } else {
+        ErrorLevel::ErrorOnWarn
     };
     for input in inputs {
         let ext = input
@@ -519,10 +546,10 @@ pub fn build(args: Args) -> io::Result<()> {
                     .last()
                     .and_then(|p| type_for_dir(p.as_os_str()))
                     .unwrap_or(LumpType::Unknown);
-                load_entry(
+                let res = load_entry(
                     &mut pwad,
                     &mut snd,
-                    name,
+                    &name,
                     || {
                         let mut data = Vec::new();
                         std::io::Read::read_to_end(&mut afile, &mut data)?;
@@ -530,7 +557,22 @@ pub fn build(args: Args) -> io::Result<()> {
                     },
                     &paths.filters,
                     typ,
-                )?;
+                );
+                if let Err(err) = res {
+                    let err = format!(
+                        "Error reading {}: {}: {err}",
+                        input.display(),
+                        name.display()
+                    );
+                    match error_level {
+                        ErrorLevel::Warn => {
+                            log::warn!("{err}");
+                        }
+                        ErrorLevel::ErrorOnWarn => {
+                            return Err(invalid_data(err));
+                        }
+                    }
+                }
             }
         } else {
             log::info!("Reading `{}`", input.display());
