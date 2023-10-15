@@ -127,15 +127,22 @@ fn load_entry(
                         .map(|p| *p.0 + 1)
                         .unwrap_or_default()
                 });
-            let (_, sample) = crate::sound::Sample::read_wav(&data).unwrap_or_else(|e| {
-                panic!(
-                    "Failed to load WAV file `{}`:\n{}\nWAV must be uncompressed 16-bit mono or 8-bit mono.",
+            let res = crate::sound::Sample::read_file(&data).map_err(|e| {
+                invalid_data(format!(
+                    "Failed to load sound effect `{}`:\n{e}",
                     path.display(),
-                    convert_error(data.as_slice(), e)
-                );
+                ))
             });
-            snd.sequences
-                .insert(id, crate::sound::Sequence::Effect(sample));
+            match res {
+                Ok(sample) => {
+                    snd.sequences
+                        .insert(id, crate::sound::Sequence::Effect(sample));
+                }
+                Err(err) => match options.ignore_errors {
+                    true => log::warn!("{err}"),
+                    false => return Err(err),
+                },
+            }
         }
         SoundFont => {
             let res = if ext.as_deref() == Some("DLS") {
@@ -143,13 +150,18 @@ fn load_entry(
             } else {
                 snd.read_sf2(&data)
             };
-            res.unwrap_or_else(|e| {
-                panic!(
+            if let Err(err) = res.map_err(|e| {
+                invalid_data(format!(
                     "Failed to load SoundFont `{}`:\n{}",
                     path.display(),
                     convert_error(data.as_slice(), e)
-                );
-            });
+                ))
+            }) {
+                match options.ignore_errors {
+                    true => log::warn!("{err}"),
+                    false => return Err(err),
+                }
+            }
         }
         Sequence => {
             let id = name_str
@@ -161,9 +173,25 @@ fn load_entry(
                         .map(|p| *p.0 + 1)
                         .unwrap_or_default()
                 });
-            let seq =
-                crate::music::MusicSequence::read_midi(&mut std::io::Cursor::new(data)).unwrap();
-            snd.sequences.insert(id, crate::sound::Sequence::Music(seq));
+            let res = if data.get(0..4) == Some(b"MThd") {
+                crate::music::MusicSequence::read_midi(&mut std::io::Cursor::new(data))
+                    .map(crate::sound::Sequence::MusicSeq)
+            } else {
+                crate::sound::Sample::read_file(&data).map(|sample| {
+                    crate::sound::Sequence::MusicSample(crate::music::MusicSample::new(sample))
+                })
+            };
+            match res.map_err(|e| {
+                invalid_data(format!("Failed to load music `{}`:\n{e}", path.display(),))
+            }) {
+                Ok(seq) => {
+                    snd.sequences.insert(id, seq);
+                }
+                Err(err) => match options.ignore_errors {
+                    true => log::warn!("{err}"),
+                    false => return Err(err),
+                },
+            }
         }
         _ => {
             let mut upper = name_str.replace('^', "\\");

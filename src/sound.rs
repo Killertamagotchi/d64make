@@ -1,4 +1,8 @@
-use crate::{convert_error, invalid_data, music::MusicSequence, too_large};
+use crate::{
+    convert_error, invalid_data,
+    music::{MusicSample, MusicSequence},
+    too_large,
+};
 use binrw::{BinRead, BinWrite};
 use nom::{
     branch::alt,
@@ -29,7 +33,8 @@ pub struct Instrument {
 #[derive(Clone, Debug)]
 pub enum Sequence {
     Effect(Sample),
-    Music(MusicSequence),
+    MusicSeq(MusicSequence),
+    MusicSample(MusicSample),
 }
 
 #[derive(Clone, Debug)]
@@ -96,6 +101,22 @@ impl Default for PatchMap {
     }
 }
 
+impl PatchMap {
+    #[inline]
+    pub fn new_sample(sample_id: u16, priority: u8, volume: u8) -> Self {
+        Self {
+            priority,
+            volume,
+            sample_id,
+            attack_time: 1,
+            decay_time: 32767,
+            release_time: 1,
+            decay_level: 127,
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum SampleData {
     Raw(Vec<i16>),
@@ -115,6 +136,7 @@ impl Default for SampleData {
 }
 
 impl SampleData {
+    /// Length in bytes, possibly when compressed
     #[inline]
     pub fn stored_len(&self) -> usize {
         match self {
@@ -122,6 +144,7 @@ impl SampleData {
             Self::Adpcm { data, .. } => data.len(),
         }
     }
+    /// Length in samples, possibly after decompression
     #[inline]
     pub fn n_samples(&self) -> usize {
         match self {
@@ -259,7 +282,90 @@ pub fn cents_to_samplerate(cents: i32) -> u32 {
     (2.0f64.powf(cents as f64 / 1200.0) * 22050.0) as u32
 }
 
+#[inline]
+fn parse_flac_tag<T: std::str::FromStr>(
+    r: &claxon::FlacReader<impl std::io::Read>,
+    name: &str,
+) -> Option<claxon::Result<T>>
+where
+    T::Err: std::fmt::Display,
+{
+    r.get_tag(name).next().map(|e| {
+        str::parse(e).map_err(|e| {
+            claxon::Error::IoError(invalid_data(format!("failed to parse {name} tag: {e}")))
+        })
+    })
+}
+
 impl Sample {
+    pub fn read_file(data: &[u8]) -> std::io::Result<Self> {
+        let magic = data.get(0..4);
+        if magic == Some(b"RIFF") {
+            Self::read_wav(data).map(|s| s.1).map_err(|e| {
+                invalid_data(format!(
+                    "{}\nWAV must be uncompressed 16-bit mono or 8-bit mono.",
+                    convert_error(data, e)
+                ))
+            })
+        } else if magic == Some(b"fLaC") {
+            Self::read_flac(data).map_err(|e| invalid_data(e))
+        } else {
+            Err(invalid_data("Unknown file format"))
+        }
+    }
+    pub fn read_flac(data: &[u8]) -> claxon::Result<Self> {
+        let mut r = claxon::FlacReader::new(std::io::BufReader::new(data))?;
+        let mut samples = Vec::with_capacity(r.streaminfo().samples.unwrap_or_default() as usize);
+        let shift = r.streaminfo().bits_per_sample as i32 - 16;
+        let mut blocks = r.blocks();
+        let mut buf = Vec::new();
+        while let Some(block) = blocks.read_next_or_eof(buf)? {
+            let len = block.len() as usize;
+            buf = block.into_buffer();
+            for i in 0..len {
+                let sample = if shift < 0 {
+                    buf[i] << -shift
+                } else {
+                    buf[i] >> shift
+                };
+                samples.push(sample as i16);
+            }
+        }
+        let priority = parse_flac_tag(&r, "d64_priority")
+            .or_else(|| parse_flac_tag(&r, "priority"))
+            .transpose()?
+            .unwrap_or(50);
+        let volume = parse_flac_tag(&r, "d64_volume")
+            .or_else(|| parse_flac_tag(&r, "volume"))
+            .transpose()?
+            .unwrap_or(127);
+        let mut r#loop = None;
+        if let Some(start) = parse_flac_tag::<u32>(&r, "d64_loop")
+            .or_else(|| parse_flac_tag(&r, "loop"))
+            .transpose()?
+        {
+            let start = start.min(samples.len() as u32);
+            let end = parse_flac_tag(&r, "d64_loop_end")
+                .or_else(|| parse_flac_tag(&r, "loop_end"))
+                .transpose()?
+                .unwrap_or_else(|| samples.len() as u32)
+                .max(start);
+            r#loop = Some(Loop {
+                start,
+                end,
+                count: u32::MAX,
+            });
+        }
+        Ok(Self {
+            priority,
+            volume,
+            info: PatchInfo {
+                samples: SampleData::Raw(samples),
+                pitch: samplerate_to_cents(r.streaminfo().sample_rate),
+                r#loop,
+            },
+        })
+    }
     pub fn read_wav<'a, E: ParseError<&'a [u8]>>(
         data: &'a [u8],
     ) -> nom::IResult<&'a [u8], Self, E> {
@@ -675,7 +781,7 @@ pub fn extract_sound(
         .1;
     for (index, seq) in sequences.iter_mut() {
         let mus = match seq {
-            Sequence::Music(mus) => mus,
+            Sequence::MusicSeq(mus) => mus,
             _ => unreachable!(),
         };
         if mus.tracks.len() == 1 && mus.tracks[0].voices_type == 0 {
@@ -766,6 +872,14 @@ impl SoundData {
             .map(|e| *e.0 + 1)
             .unwrap_or_default();
         for seq in self.sequences.values() {
+            if let Sequence::MusicSample(sample) = seq {
+                let count = sample.sample_count();
+                patch_count += count;
+                patchmap_count += count;
+                sample_count += count;
+            }
+        }
+        for seq in self.sequences.values() {
             if let Sequence::Effect(sample) = seq {
                 let compress = matches!(sample.info.samples, SampleData::Adpcm { .. });
                 if compress {
@@ -822,6 +936,18 @@ impl SoundData {
             patchmap_count += cnt as usize;
         }
         for seq in self.sequences.values() {
+            if let Sequence::MusicSample(sample) = seq {
+                for _ in 0..sample.sample_count() {
+                    let patch = Patch {
+                        cnt: 1,
+                        idx: patchmap_count as u16,
+                    };
+                    patch.write_no_seek(w)?;
+                    patchmap_count += 1;
+                }
+            }
+        }
+        for seq in self.sequences.values() {
             if let Sequence::Effect(_) = seq {
                 let patch = Patch {
                     cnt: 1,
@@ -856,17 +982,18 @@ impl SoundData {
         }
         samples_written.clear();
         for seq in self.sequences.values() {
-            if let Sequence::Effect(sample) = seq {
-                let map = PatchMap {
-                    priority: sample.priority,
-                    volume: sample.volume,
-                    sample_id: sample_count as u16,
-                    attack_time: 1,
-                    decay_time: 32767,
-                    release_time: 1,
-                    decay_level: 127,
-                    ..Default::default()
-                };
+            if let Sequence::MusicSample(s) = seq {
+                for _ in 0..s.sample_count() {
+                    let map = PatchMap::new_sample(sample_count as u16, s.priority, s.volume);
+                    map.write_no_seek(w)?;
+                    patchmap_count += 1;
+                    sample_count += 1;
+                }
+            }
+        }
+        for seq in self.sequences.values() {
+            if let Sequence::Effect(s) = seq {
+                let map = PatchMap::new_sample(sample_count as u16, s.priority, s.volume);
                 map.write_no_seek(w)?;
                 patchmap_count += 1;
                 sample_count += 1;
@@ -949,11 +1076,17 @@ impl SoundData {
         let mut seqheaders = Vec::with_capacity(16 * self.sequences.len());
         let mut trackdata = Vec::new();
 
-        let mut patchidx = self
+        let mut samp_patchidx = self
             .instruments
             .last_key_value()
             .map(|e| *e.0 + 1)
             .unwrap_or_default();
+        let mut effect_patchidx = samp_patchidx;
+        for seq in self.sequences.values() {
+            if let Sequence::MusicSample(samp) = seq {
+                effect_patchidx += samp.sample_count() as u16;
+            }
+        }
         let numseqs = self
             .sequences
             .last_key_value()
@@ -961,15 +1094,20 @@ impl SoundData {
             .unwrap_or_default();
         let mut sample_seq = MusicSequence::new_effect();
         let mut loop_seq = MusicSequence::new_loop_effect();
-        let empty = Sequence::Music(MusicSequence::default());
+        let empty = Sequence::MusicSeq(MusicSequence::default());
         for seqindex in 0..numseqs {
             let seq = self.sequences.get(&seqindex).unwrap_or(&empty);
             let filepos = trackdata.len();
             match seq {
-                Sequence::Music(mus) => {
+                Sequence::MusicSeq(mus) => {
+                    let n_tracks = u16::try_from(mus.tracks.len()).unwrap();
                     mus.write_raw(&mut trackdata)?;
-                    seqheaders
-                        .extend_from_slice(&u16::try_from(mus.tracks.len()).unwrap().to_be_bytes());
+                    seqheaders.extend_from_slice(&n_tracks.to_be_bytes());
+                }
+                Sequence::MusicSample(sample) => {
+                    sample.to_seq(samp_patchidx).write_raw(&mut trackdata)?;
+                    seqheaders.extend_from_slice(&1u16.to_be_bytes());
+                    samp_patchidx += sample.sample_count() as u16;
                 }
                 Sequence::Effect(sample) => {
                     let out_seq = match sample.info.r#loop {
@@ -983,10 +1121,10 @@ impl SoundData {
                             &mut sample_seq
                         }
                     };
-                    out_seq.tracks[0].initpatchnum = patchidx;
+                    out_seq.tracks[0].initpatchnum = effect_patchidx;
                     out_seq.write_raw(&mut trackdata)?;
                     seqheaders.extend_from_slice(&1u16.to_be_bytes());
-                    patchidx += 1;
+                    effect_patchidx += 1;
                 }
             }
             // pad to 8 byte boundary
@@ -1041,6 +1179,13 @@ impl SoundData {
                 }
             }
         }
+        for (_, seq) in &self.sequences {
+            if let Sequence::MusicSample(sample) = seq {
+                for info in sample.samples() {
+                    f(info)?;
+                }
+            }
+        }
         Ok(())
     }
     pub fn foreach_instrument_sample_mut(
@@ -1054,6 +1199,14 @@ impl SoundData {
                 let sample = map.sample.as_mut().unwrap();
                 if samples_written.insert(Rc::as_ptr(sample)) {
                     f(index, &mut sample.borrow_mut())?;
+                    index += 1;
+                }
+            }
+        }
+        for (_, seq) in &mut self.sequences {
+            if let Sequence::MusicSample(sample) = seq {
+                for info in sample.samples_mut() {
+                    f(index, info)?;
                     index += 1;
                 }
             }

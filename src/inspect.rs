@@ -186,7 +186,8 @@ pub fn inspect(args: Args) -> std::io::Result<()> {
         for seq in snd.sequences.values() {
             match seq {
                 crate::sound::Sequence::Effect(_) => effect_count += 1,
-                crate::sound::Sequence::Music(_) => music_count += 1,
+                crate::sound::Sequence::MusicSeq(_) => music_count += 1,
+                crate::sound::Sequence::MusicSample(_) => unreachable!(),
             }
         }
         log::info!("Effect Sequences: {}", effect_count);
@@ -211,7 +212,7 @@ pub fn inspect(args: Args) -> std::io::Result<()> {
                 log::info!("    TRACK EVENTS     LABELS INITPATCH");
             }
             for (index, seq) in &snd.sequences {
-                if let crate::sound::Sequence::Music(seq) = seq {
+                if let crate::sound::Sequence::MusicSeq(seq) = seq {
                     log::info!("  SEQ {index}");
                     for (track_index, track) in seq.tracks.iter().enumerate() {
                         if verbose {

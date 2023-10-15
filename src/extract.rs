@@ -782,7 +782,7 @@ pub fn extract(mut args: Args) -> io::Result<()> {
         }
         for (index, seq) in &snd.sequences {
             match seq {
-                crate::sound::Sequence::Music(seq) => {
+                crate::sound::Sequence::MusicSeq(seq) => {
                     if let Some(mut file) = args.try_create_file(
                         || Some("MUSIC"),
                         || Cow::Owned(format!("MUS_{index:03}")),
@@ -827,6 +827,7 @@ pub fn extract(mut args: Args) -> io::Result<()> {
                         }
                     }
                 }
+                crate::sound::Sequence::MusicSample(_) => unreachable!(),
             }
             if args.outfile.is_some() {
                 break;

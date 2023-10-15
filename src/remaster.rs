@@ -234,7 +234,7 @@ pub fn read_wad(
                         &entry.entry.data,
                     ))?;
                     snd.sequences
-                        .insert(counter, crate::sound::Sequence::Music(seq));
+                        .insert(counter, crate::sound::Sequence::MusicSeq(seq));
                     counter += 1;
                 }
             }

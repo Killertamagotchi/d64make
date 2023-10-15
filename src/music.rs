@@ -1,3 +1,7 @@
+use crate::{
+    sound::{NoSeekWrite, PatchInfo, Sample, Sequence, SoundData},
+    too_large,
+};
 use binrw::BinRead;
 use ghakuf::formats::{VLQBuilder, VLQ};
 use nom::{
@@ -9,11 +13,6 @@ use nom::{
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     io::Cursor,
-};
-
-use crate::{
-    sound::{NoSeekWrite, Sequence, SoundData},
-    too_large,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -341,18 +340,9 @@ impl MusicSequence {
     pub fn new_effect() -> Self {
         let mut seq = Self::default();
         let events = vec![
-            TimedEvent {
-                delta: 0,
-                event: Event::NoteOn(60, 127),
-            },
-            TimedEvent {
-                delta: 0,
-                event: Event::NoteOff(60),
-            },
-            TimedEvent {
-                delta: 0,
-                event: Event::TrkEnd,
-            },
+            TimedEvent::new(0, Event::NoteOn(60, 127)),
+            TimedEvent::new(0, Event::NoteOff(60)),
+            TimedEvent::new(0, Event::TrkEnd),
         ];
         let track = Track {
             initvolume_cntrl: 127,
@@ -368,22 +358,12 @@ impl MusicSequence {
     pub fn new_loop_effect() -> Self {
         let mut seq = Self::default();
         let events = vec![
-            TimedEvent {
-                delta: 0,
-                event: Event::NoteOn(60, 127),
-            },
-            TimedEvent {
-                delta: 0,
-                event: Event::Null,
-            },
-            TimedEvent {
-                delta: 120,
-                event: Event::TrkJump(0),
-            },
-            TimedEvent {
-                delta: 0,
-                event: Event::TrkEnd,
-            },
+            TimedEvent::new(0, Event::NoteOn(60, 127)),
+            TimedEvent::new(0, Event::Null),
+            /* the delta value here is not important as long the label jumps
+            to the null event above */
+            TimedEvent::new(120, Event::TrkJump(0)),
+            TimedEvent::new(0, Event::TrkEnd),
         ];
         let track = Track {
             initvolume_cntrl: 127,
@@ -482,7 +462,12 @@ impl MusicSequence {
             if track.voices_type != 1 {
                 continue;
             }
-            let ch = track_index as u8;
+            // skip the drum track
+            let ch = if track_index >= 9 {
+                track_index + 1
+            } else {
+                track_index
+            } as u8;
             let mut tempo_delta = 0;
             let mut delta_time = 0;
             let mut label_index = 0;
@@ -820,6 +805,13 @@ pub struct TimedEvent {
     pub event: Event,
 }
 
+impl TimedEvent {
+    #[inline]
+    pub fn new(delta: u32, event: Event) -> Self {
+        Self { delta, event }
+    }
+}
+
 pub fn extract_sequences<'a, E: ParseError<&'a [u8]>>(
     data: &'a [u8],
 ) -> nom::IResult<&'a [u8], BTreeMap<u16, Sequence>, E> {
@@ -893,9 +885,103 @@ pub fn extract_sequences<'a, E: ParseError<&'a [u8]>>(
             tracks.push(track);
             trackdata = d;
         }
-        sequences.insert(seqindex, Sequence::Music(MusicSequence { tracks }));
+        sequences.insert(seqindex, Sequence::MusicSeq(MusicSequence { tracks }));
         data = d;
     }
 
     Ok((&[], sequences))
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct MusicSample {
+    pub start: Vec<PatchInfo>,
+    pub r#loop: Vec<PatchInfo>,
+    pub priority: u8,
+    pub volume: u8,
+}
+
+impl MusicSample {
+    pub fn new(sample: Sample) -> Self {
+        const CHUNK_LEN: usize = 0x8000;
+        let data = sample.info.samples.raw_data();
+        let (start, r#loop) = match sample.info.r#loop {
+            Some(r#loop) => {
+                let (start, r#loop) = data[0..r#loop.end as usize].split_at(r#loop.start as usize);
+                (start.chunks(CHUNK_LEN), r#loop.chunks(CHUNK_LEN))
+            }
+            None => (data.chunks(CHUNK_LEN), [].chunks(CHUNK_LEN)),
+        };
+        Self {
+            start: start
+                .map(|data| PatchInfo {
+                    samples: crate::sound::SampleData::Raw(data.to_vec()),
+                    pitch: sample.info.pitch,
+                    r#loop: None,
+                })
+                .collect(),
+            r#loop: r#loop
+                .map(|data| PatchInfo {
+                    samples: crate::sound::SampleData::Raw(data.to_vec()),
+                    pitch: sample.info.pitch,
+                    r#loop: None,
+                })
+                .collect(),
+            priority: sample.priority,
+            volume: sample.volume,
+        }
+    }
+    pub fn to_seq(&self, patchidx: u16) -> MusicSequence {
+        let mut seq = MusicSequence::default();
+        let mut events = Vec::new();
+        let mut labels = Vec::new();
+        for (index, info) in self.start.iter().enumerate() {
+            let delta = (info.samples.n_samples() as f64 * 240.0
+                / 22050.0
+                / 2.0f64.powf(info.pitch as f64 / 1200.0))
+                .ceil() as u32;
+            events.push(TimedEvent::new(0, Event::PatchChg(patchidx + index as u16)));
+            events.push(TimedEvent::new(0, Event::NoteOn(60, 127)));
+            events.push(TimedEvent::new(delta, Event::NoteOff(60)));
+        }
+        if !self.r#loop.is_empty() {
+            let loop_offset = patchidx + self.start.len() as u16;
+            labels.push(events.len());
+            events.push(TimedEvent::new(0, Event::Null));
+            for (index, info) in self.r#loop.iter().enumerate() {
+                let delta = (info.samples.n_samples() as f64 * 240.0
+                    / 22050.0
+                    / 2.0f64.powf(info.pitch as f64 / 1200.0))
+                    .ceil() as u32;
+                events.push(TimedEvent::new(0, Event::PatchChg(loop_offset + index as u16)));
+                events.push(TimedEvent::new(0, Event::NoteOn(60, 127)));
+                events.push(TimedEvent::new(delta, Event::NoteOff(60)));
+            }
+            events.push(TimedEvent::new(0, Event::TrkJump(0)));
+        }
+        events.push(TimedEvent::new(0, Event::TrkEnd));
+        seq.tracks.push(Track {
+            voices_type: 1,
+            initvolume_cntrl: 127,
+            initpan_cntrl: 64,
+            initppq: 120,
+            initqpm: 120,
+            initpatchnum: patchidx,
+            events,
+            labels,
+            ..Default::default()
+        });
+        seq
+    }
+    #[inline]
+    pub fn sample_count(&self) -> usize {
+        self.start.len() + self.r#loop.len()
+    }
+    #[inline]
+    pub fn samples(&self) -> impl Iterator<Item = &PatchInfo> {
+        self.start.iter().chain(self.r#loop.iter())
+    }
+    #[inline]
+    pub fn samples_mut(&mut self) -> impl Iterator<Item = &mut PatchInfo> {
+        self.start.iter_mut().chain(self.r#loop.iter_mut())
+    }
 }

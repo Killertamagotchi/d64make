@@ -339,7 +339,7 @@ impl SoundData {
             let bagstart = le_u16(d)?.1 as usize;
             let bagend = le_u16(take(24usize)(next)?.0)?.1 as usize;
 
-            let patch = (preset & 0x7f) | ((bank & 0x7f) << 7);
+            let patch = (preset & 0x7f) | ((bank & 0x1ff) << 7);
             self.instruments.remove(&patch); // ensure it is replaced
             let baglen = bagend - bagstart;
             let mut global_default = PatchMap::default();
@@ -475,6 +475,10 @@ impl SoundData {
             patchmap_count += inst.patchmaps.len() as u16;
         }
 
+        /* this number *must* match the number of generators per patchmap added
+         * in the igen loop below */
+        const INST_GENERATORS: u32 = 11;
+
         let sdta_size = smpl_size + 12;
 
         let phdr_size = (patch_count as u32 + 1) * 38;
@@ -484,7 +488,7 @@ impl SoundData {
         let inst_size = (patchmap_count as u32 + 1) * 22;
         let ibag_size = (patchmap_count as u32 + 1) * 4;
         let imod_size = 10u32;
-        let igen_size = patchmap_count as u32 * 11 * 4 + 4;
+        let igen_size = 4 + patchmap_count as u32 * INST_GENERATORS * 4;
         let shdr_size = (sample_count + 1) * 46;
         let pdta_size = 4u32 // list id
             + 9 * 8          // chunk headers
@@ -543,7 +547,7 @@ impl SoundData {
         for (index, (patchnum, inst)) in self.instruments.iter().enumerate() {
             write!(w, "{:\0<20}", format!("PRESET_{:05}", index))?;
             w.write_all(&(*patchnum & 0x7f).to_le_bytes())?;
-            w.write_all(&((*patchnum & 0x3f80) >> 7).to_le_bytes())?;
+            w.write_all(&((*patchnum & 0xff80) >> 7).to_le_bytes())?;
             w.write_all(&patchmap_count.to_le_bytes())?;
             w.write_all(&0u32.to_le_bytes())?;
             w.write_all(&0u32.to_le_bytes())?;
@@ -603,15 +607,15 @@ impl SoundData {
 
         w.write_all(b"ibag")?;
         w.write_all(&ibag_size.to_le_bytes())?;
-        patchmap_count = 0;
+        let mut igen_index = 0u16;
         for inst in self.instruments.values() {
             for _ in &inst.patchmaps {
-                w.write_all(&(patchmap_count * 11).to_le_bytes())?;
+                w.write_all(&igen_index.to_le_bytes())?;
                 w.write_all(&0u16.to_le_bytes())?;
-                patchmap_count += 1;
+                igen_index += INST_GENERATORS as u16;
             }
         }
-        w.write_all(&(patchmap_count * 11).to_le_bytes())?;
+        w.write_all(&igen_index.to_le_bytes())?;
         w.write_all(&0u16.to_le_bytes())?;
 
         w.write_all(b"imod")?;
