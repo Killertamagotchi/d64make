@@ -507,7 +507,8 @@ impl Texture {
         decoder.remember_unknown_chunks(true);
         let png = decoder.decode(data).map_err(invalid_data)?;
         let info = decoder.info_png();
-        if info.color.colortype() != lodepng::ColorType::PALETTE || info.color.palette().len() > 16
+        let bitdepth = info.color.bitdepth();
+        if info.color.colortype() != lodepng::ColorType::PALETTE || (bitdepth == 8 && info.color.palette().len() > 16)
         {
             return Err(invalid_data(
                 "Texture PNG must be indexed color with <= 16 palette entries",
