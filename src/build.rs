@@ -63,7 +63,7 @@ fn load_entry(
         Some(n) => n,
         None => return Ok(()),
     };
-    let name_str = name.to_string_lossy();
+    let name_str = name.to_string_lossy().to_ascii_uppercase();
     if name_str.starts_with('.') || name_str.len() > 8 {
         return Ok(());
     }
@@ -73,8 +73,7 @@ fn load_entry(
     }
     let ext = path
         .extension()
-        .and_then(|s| s.to_str())
-        .map(|e| e.to_ascii_uppercase());
+        .and_then(|s| s.to_str());
     let mut typ = match (base_typ, ext.as_deref()) {
         (Sprite, Some("LMP") | Some("PAL")) => Palette,
         (Sequence, Some("SF2") | Some("DLS")) => SoundFont,
