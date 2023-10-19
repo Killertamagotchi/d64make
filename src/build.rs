@@ -73,7 +73,8 @@ fn load_entry(
     }
     let ext = path
         .extension()
-        .and_then(|s| s.to_str());
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_uppercase());
     let mut typ = match (base_typ, ext.as_deref()) {
         (Sprite, Some("LMP") | Some("PAL")) => Palette,
         (Sequence, Some("SF2") | Some("DLS")) => SoundFont,
