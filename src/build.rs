@@ -4,7 +4,7 @@ use crate::{
     gfx, invalid_data,
     sound::SoundData,
     wad::{EntryMap, FlatEntry},
-    EntryName, FileFilters, FlatWad, LumpType, Wad, WadEntry,
+    EntryName, FileFilters, FlatWad, LumpType, Wad, WadEntry, lumps::TEXTURE_ORDER,
 };
 use std::{
     collections::BTreeMap,
@@ -459,10 +459,22 @@ impl Wad {
         flat.entries.push(FlatEntry::marker("T_START"));
         flat.entries
             .reserve(self.textures.len() + self.flats.len() + 2);
-        for (name, entry) in self.textures {
+        let texend = self.textures.iter().position(|e| &e.0.0 == *TEXTURE_ORDER.last().unwrap())
+            .map(|p| p + 1)
+            .unwrap_or_else(|| self.textures.len());
+        let mut textures = self.textures.into_iter();
+        let mut i = 0;
+        while let Some((name, entry)) = textures.next() {
             flat.entries.push(FlatEntry::new_entry(name, entry));
+            i += 1;
+            if i >= texend {
+                break;
+            }
         }
         for (name, entry) in self.flats {
+            flat.entries.push(FlatEntry::new_entry(name, entry));
+        }
+        for (name, entry) in textures {
             flat.entries.push(FlatEntry::new_entry(name, entry));
         }
         flat.entries.push(FlatEntry::marker("T_END"));
