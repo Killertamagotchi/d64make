@@ -199,7 +199,12 @@ fn load_entry(
             upper.make_ascii_uppercase();
             let name = EntryName::new(&upper).unwrap();
             let entry = WadEntry::new(typ, data);
-            wad.merge_one(name, entry);
+            if let Err(err) = wad.merge_one(name, entry) {
+                match options.ignore_errors {
+                    true => log::warn!("{err}"),
+                    false => return Err(err),
+                }
+            }
         }
     }
     Ok(())
@@ -531,7 +536,7 @@ pub fn build(args: Args) -> io::Result<()> {
                 flat.entries
                     .retain(|entry| paths.filters.matches(&entry.name.display()));
             }
-            iwad.merge_flat(flat);
+            iwad.merge_flat(flat, ignore_errors)?;
             if let Some(isnd) = isnd {
                 snd = isnd;
             }

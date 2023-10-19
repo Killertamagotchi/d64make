@@ -380,7 +380,7 @@ impl FlatWad {
         }
         let entry = entry.decompress().map_err(|e| {
             invalid_data(format!(
-                "Failed to decompress entry `{}`:\n{}",
+                "Failed to decompress entry `{}`: {}",
                 name.display(),
                 e,
             ))
@@ -399,7 +399,7 @@ impl FlatWad {
                 context("Graphic", |d| gfx::Graphic::parse(d, entry.typ))(&entry.data)
                     .map_err(|e| {
                         invalid_data(format!(
-                            "Failed to parse graphic `{}`:\n{}",
+                            "Failed to parse graphic `{}`: {}",
                             name.display(),
                             convert_error(entry.data.as_slice(), e),
                         ))
@@ -410,7 +410,7 @@ impl FlatWad {
             Texture | Flat => context("Texture", gfx::Texture::parse)(&entry.data)
                 .map_err(|e| {
                     invalid_data(format!(
-                        "Failed to parse texture `{}`:\n{}",
+                        "Failed to parse texture `{}`: {}",
                         name.display(),
                         convert_error(entry.data.as_slice(), e),
                     ))
@@ -420,7 +420,7 @@ impl FlatWad {
             HudGraphic | Sky => context("HudGraphic/Sky", gfx::Sprite::parse)(&entry.data)
                 .map_err(|e| {
                     invalid_data(format!(
-                        "Failed to parse HUD graphic `{}`:\n{}",
+                        "Failed to parse HUD graphic `{}`: {}",
                         name.display(),
                         convert_error(entry.data.as_slice(), e),
                     ))
@@ -431,7 +431,7 @@ impl FlatWad {
                 let sprite = context("Sprite", gfx::Sprite::parse)(&entry.data)
                     .map_err(|e| {
                         invalid_data(format!(
-                            "Failed to parse sprite `{}`:\n{}",
+                            "Failed to parse sprite `{}`: {}",
                             name.display(),
                             convert_error(entry.data.as_slice(), e),
                         ))
@@ -678,7 +678,7 @@ pub fn read_rom_or_iwad(
                     .map(|w| w.1)
                     .map_err(|e| {
                         invalid_data(format!(
-                            "Failed reading {}:\n{}",
+                            "Failed reading {}: {}",
                             path.display(),
                             convert_error(wad.as_slice(), e)
                         ))

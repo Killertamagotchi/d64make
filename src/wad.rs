@@ -143,18 +143,18 @@ impl Wad {
         merge(&mut self.skies, other.skies);
         merge(&mut self.other, other.other);
     }
-    pub fn merge_one(&mut self, name: EntryName, entry: WadEntry<Vec<u8>>) {
+    pub fn merge_one(&mut self, name: EntryName, entry: WadEntry<Vec<u8>>) -> std::io::Result<()> {
         let WadEntry { typ, data, .. } = entry;
         match typ {
             // important: must load and rewrite map wad to have proper 4-byte alignments
             LumpType::Map => {
                 match FlatWad::parse(&data, WadType::N64, false, &Default::default()) {
                     Ok((_, wad)) => replace(&mut self.maps, name, WadEntry::new(typ, wad)),
-                    Err(e) => log::warn!(
-                        "Failed to load map {}:\n{}",
+                    Err(e) => return Err(invalid_data(format!(
+                        "Failed to load map {}: {}",
                         name.display(),
                         crate::convert_error(data.as_slice(), e)
-                    ),
+                    ))),
                 }
             }
             LumpType::Palette => {
@@ -163,72 +163,79 @@ impl Wad {
                     gfx::palette_16_to_rgba(data, &mut palette);
                     replace(&mut self.palettes, name, WadEntry::new(typ, palette));
                 } else {
-                    log::warn!("Palette {} does not have enough entries", name.display());
+                    return Err(invalid_data(format!("Palette {} does not have enough entries", name.display())));
                 }
             }
             LumpType::Sprite => match gfx::Sprite::parse(&data) {
                 Ok((_, sprite)) => replace(&mut self.sprites, name, WadEntry::new(typ, sprite)),
-                Err(e) => log::warn!(
-                    "Invalid sprite {}:\n{}",
+                Err(e) => return Err(invalid_data(format!(
+                    "Invalid sprite {}: {}",
                     name.display(),
                     crate::convert_error(data.as_slice(), e)
-                ),
+                ))),
             },
             LumpType::Texture => match gfx::Texture::parse(&data) {
                 Ok((_, texture)) => replace(&mut self.textures, name, WadEntry::new(typ, texture)),
-                Err(e) => log::warn!(
-                    "Invalid texture {}:\n{}",
+                Err(e) => return Err(invalid_data(format!(
+                    "Invalid texture {}: {}",
                     name.display(),
                     crate::convert_error(data.as_slice(), e)
-                ),
+                ))),
             },
             LumpType::Flat => match gfx::Texture::parse(&data) {
                 Ok((_, flat)) => replace(&mut self.flats, name, WadEntry::new(typ, flat)),
-                Err(e) => log::warn!(
-                    "Invalid flat {}:\n{}",
+                Err(e) => return Err(invalid_data(format!(
+                    "Invalid flat {}: {}",
                     name.display(),
                     crate::convert_error(data.as_slice(), e)
-                ),
+                ))),
             },
             LumpType::Graphic | LumpType::Fire | LumpType::Cloud => {
                 match gfx::Graphic::parse(&data, typ) {
                     Ok((_, graphic)) => {
                         replace(&mut self.graphics, name, WadEntry::new(typ, graphic))
                     }
-                    Err(e) => log::warn!(
-                        "Invalid graphic {}:\n{}",
+                    Err(e) => return Err(invalid_data(format!(
+                        "Invalid graphic {}: {}",
                         name.display(),
                         crate::convert_error(data.as_slice(), e)
-                    ),
+                    ))),
                 }
             }
             LumpType::HudGraphic => match gfx::Sprite::parse(&data) {
                 Ok((_, sprite)) => {
                     replace(&mut self.hud_graphics, name, WadEntry::new(typ, sprite))
                 }
-                Err(e) => log::warn!(
-                    "Invalid HUD graphic {}:\n{}",
+                Err(e) => return Err(invalid_data(format!(
+                    "Invalid HUD graphic {}: {}",
                     name.display(),
                     crate::convert_error(data.as_slice(), e)
-                ),
+                ))),
             },
             LumpType::Sky => match gfx::Sprite::parse(&data) {
                 Ok((_, sprite)) => replace(&mut self.skies, name, WadEntry::new(typ, sprite)),
-                Err(e) => log::warn!(
-                    "Invalid sky {}:\n{}",
+                Err(e) => return Err(invalid_data(format!(
+                    "Invalid sky {}: {}",
                     name.display(),
                     crate::convert_error(data.as_slice(), e)
-                ),
+                ))),
             },
             LumpType::Marker => {}
             _ => replace(&mut self.other, name, WadEntry::new(typ, data)),
         }
+        Ok(())
     }
     #[inline]
-    pub fn merge_flat(&mut self, other: FlatWad) {
+    pub fn merge_flat(&mut self, other: FlatWad, ignore_errors: bool) -> std::io::Result<()> {
         for FlatEntry { name, entry } in other.entries {
-            self.merge_one(name, entry);
+            if let Err(err) = self.merge_one(name, entry) {
+                match ignore_errors {
+                    true => log::warn!("{err}"),
+                    false => return Err(err),
+                }
+            }
         }
+        Ok(())
     }
 }
 
@@ -238,15 +245,6 @@ impl FlatWad {
         for (name, entry) in other {
             self.entries.push(FlatEntry::new_entry(name, entry));
         }
-    }
-}
-
-impl From<FlatWad> for Wad {
-    #[inline]
-    fn from(value: FlatWad) -> Self {
-        let mut wad = Self::default();
-        wad.merge_flat(value);
-        wad
     }
 }
 
