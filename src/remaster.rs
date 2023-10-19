@@ -145,7 +145,7 @@ pub fn read_wad(
                 LumpType::Map => {
                     let d = std::mem::take(&mut entry.entry.data);
                     let mut map = context("Map WAD", |d| {
-                        FlatWad::parse(d, WadType::Remaster, false, &Default::default())
+                        FlatWad::parse(d, WadType::RemasterMap, false, &Default::default())
                     })(&d)
                     .map_err(|e| invalid_data(convert_error(data, e)))?
                     .1;

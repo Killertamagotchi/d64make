@@ -151,14 +151,20 @@ const ROMDATA_PROTO: RomData<'static> = RomData {
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum WadType {
     N64,
+    N64Map,
     N64Prototype,
     Remaster,
+    RemasterMap,
 }
 
 impl WadType {
     #[inline]
+    pub fn is_map(&self) -> bool {
+        matches!(self, Self::N64Map | Self::RemasterMap)
+    }
+    #[inline]
     pub fn is_remaster(&self) -> bool {
-        matches!(self, Self::Remaster)
+        matches!(self, Self::Remaster | Self::RemasterMap)
     }
     #[inline]
     pub fn is_prototype(&self) -> bool {
@@ -263,6 +269,7 @@ impl FlatWad {
                 typ = Palette;
             } else if typ == Unknown {
                 if wad_type.is_prototype() && is_map_lump(n) {
+                    typ = MapLump;
                     cmap = cur_map.as_mut();
                 } else {
                     if let Some((map_name, cur_map)) = cur_map.take() {
@@ -277,7 +284,11 @@ impl FlatWad {
                         cur_map.write(&mut entry.entry.data, false).unwrap();
                         entries.push(entry);
                     }
-                    if n.starts_with(b"MAP") {
+                    if wad_type.is_map() {
+                        if is_map_lump(n) {
+                            typ = MapLump;
+                        }
+                    } else if n.starts_with(b"MAP") {
                         typ = Map;
                         if wad_type.is_prototype() {
                             cur_map = Some((name.clone(), FlatWad::default()));
@@ -730,7 +741,7 @@ pub fn extract(mut args: Args) -> io::Result<()> {
             Palette => "PAL",
             Map => "WAD",
             Unknown | Demo => "LMP",
-            Marker | Sample | SoundFont | Sequence => unreachable!(),
+            Marker | Sample | SoundFont | Sequence | MapLump => unreachable!(),
         }
     }
     fn subdir_for(typ: LumpType) -> Option<&'static str> {
@@ -745,7 +756,7 @@ pub fn extract(mut args: Args) -> io::Result<()> {
             Sky | Fire | Cloud => "SKIES",
             Map => "MAPS",
             Demo => "DEMOS",
-            Marker | Sample | SoundFont | Sequence => unreachable!(),
+            Marker | Sample | SoundFont | Sequence | MapLump => unreachable!(),
         })
     }
     for (index, FlatEntry { name, entry }) in wad.entries.iter().enumerate() {

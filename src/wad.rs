@@ -41,6 +41,7 @@ pub enum LumpType {
     Fire,
     Cloud,
     Map,
+    MapLump,
     Demo,
     Sample,
     SoundFont,
@@ -148,7 +149,7 @@ impl Wad {
         match typ {
             // important: must load and rewrite map wad to have proper 4-byte alignments
             LumpType::Map => {
-                match FlatWad::parse(&data, WadType::N64, false, &Default::default()) {
+                match FlatWad::parse(&data, WadType::N64Map, false, &Default::default()) {
                     Ok((_, wad)) => replace(&mut self.maps, name, WadEntry::new(typ, wad)),
                     Err(e) => return Err(invalid_data(format!(
                         "Failed to load map {}: {}",
